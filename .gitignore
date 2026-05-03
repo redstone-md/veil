@@ -1,0 +1,67 @@
+# Build artifacts
+/bin/
+/dist/
+/build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+
+# Go
+/core/vendor/
+*.test
+*.prof
+coverage.out
+coverage.html
+
+# Editors / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment / local config
+.env
+.env.local
+*.local.yaml
+*.local.toml
+config.local.*
+secrets/
+
+# Logs
+*.log
+/logs/
+
+# Tauri / Node
+node_modules/
+/installer/src-tauri/target/
+/clients/desktop/src-tauri/target/
+/clients/mobile/node_modules/
+dist-electron/
+
+# Mobile build outputs
+*.apk
+*.aab
+*.ipa
+
+# OS-generated
+desktop.ini
+
+# Ad-hoc developer notes (kept out of public repo)
+/scratch/
+NOTES.md
+TODO.local.md
+
+# Original PRD ideation file (private working draft)
+perp.md
+
+# Local editor / tooling state (never committed)
+/.cursor/
+/.aider*
+/.windsurf/
+/.idea/workspace.xml

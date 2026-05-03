@@ -1,0 +1,17 @@
+# Normalize all text files to LF on commit, regardless of the OS
+# the contributor is working on. Binary files are detected by Git
+# automatically.
+* text=auto eol=lf
+
+# Explicitly mark Windows-only files that should keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Treat these as binary; never try to diff or merge.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary

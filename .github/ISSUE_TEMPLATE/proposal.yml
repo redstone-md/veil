@@ -1,0 +1,38 @@
+name: Proposal
+description: Propose a feature, design change, or non-trivial code change
+labels: ["proposal", "discussion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template before writing more than ~300 lines of new code,
+        so that we can align on direction first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: What user need is not currently met? Describe the user, not the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: A short description of how you would solve it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches and why they were rejected.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and impact
+      description: Affected packages, breaking changes, threat-model implications, doc updates needed.
+  - type: textarea
+    id: open-questions
+    attributes:
+      label: Open questions
+      description: What still needs to be decided?

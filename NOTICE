@@ -1,0 +1,17 @@
+Veil VPN
+Copyright 2026 Veil VPN Project Contributors
+
+This product includes software developed by the Veil VPN Project
+(https://github.com/redstone-md/veil).
+
+Licensed under the Apache License, Version 2.0. See LICENSE file
+for full terms.
+
+When redistributing this product or any derivative work, you must
+preserve this NOTICE file and provide attribution to the Veil VPN
+Project as required by the Apache License, Section 4.
+
+This product includes third-party software components. See the
+respective LICENSE and NOTICE files in each component's directory,
+as well as the dependency manifests (go.mod, package.json, Cargo.toml)
+for upstream attribution.
