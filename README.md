@@ -57,8 +57,20 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       captures the first end-to-end run against a real Lithuania
       VPS — three transports (Reality, WSS, QUIC) bound at once,
       30-stream multiplex, throughput numbers vs direct, Reality
-      probe behaviour. Edge OAuth + cross-platform release packaging
-      split out as Phase 3.7.
+      probe behaviour.
+- [x] **Phase 3.7 (installer release + edge bundle generator)** —
+      a tag-triggered cross-platform installer build matrix
+      (`.github/workflows/installer.yml`) producing
+      `.AppImage` / `.deb` / `.dmg` / `.app` / `.msi` artefacts
+      and attaching them to the matching GitHub Release.
+      Plus the installer's Edge workflow is now functional:
+      pick Deno Deploy or Fly.io, fill in origin host/port/path,
+      hit Generate, and the GUI emits a complete folder of
+      worker source + provider config + DEPLOY recipe that the
+      operator runs through `deployctl deploy` / `fly deploy`.
+- [ ] **Phase 3.8** — Direct OAuth push from the installer to
+      Deno Deploy / Fly.io; macOS / Windows codesigning of the
+      installer artefacts.
 - [x] **Phase 4 (CLI/SDK half)** — Refactor of the connect path into
       a reusable `internal/client.Client`, a CGO-built libveil shared
       library exposing a stable C ABI (`core/pkg/cgo` +
