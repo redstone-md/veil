@@ -27,6 +27,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/proxy"
 	"github.com/redstone-md/veil/core/internal/session"
 	"github.com/redstone-md/veil/core/internal/transport"
+	"github.com/redstone-md/veil/core/internal/transport/masquetr"
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
 	"github.com/redstone-md/veil/core/internal/transport/realitytr"
 	"github.com/redstone-md/veil/core/internal/transport/wsstr"
@@ -324,6 +325,13 @@ func buildDialer(s config.ClientServer, serverStaticPub []byte) (transport.Diale
 		return realitytr.NewDialer(realitytr.DialConfig{
 			Secret: secret,
 			SNI:    s.SNI,
+		}), nil
+	case config.TransportMASQUE:
+		return masquetr.NewDialer(masquetr.DialConfig{
+			ProxyAddr:          s.Addr,
+			Path:               s.Path,
+			SNI:                s.SNI,
+			InsecureSkipVerify: s.InsecureSkipVerify(),
 		}), nil
 	default:
 		return nil, fmt.Errorf("unknown transport type %q", s.Type)

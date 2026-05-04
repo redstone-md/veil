@@ -132,9 +132,16 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       regions / bandwidth / container debuggability Fly offers,
       and a deeper ADR-0003 update with the concrete `masque-go`
       v0.3 API findings + nested-QUIC architecture sketch.
-- [ ] **Phase 5.7** — Functional MASQUE implementation once
-      `quic-go/masque-go` and `refraction-networking/uquic`
-      stabilise; perf benchmarks vs. bare QUIC and Reality.
+- [x] **Phase 5.7 (functional MASQUE)** — wired
+      `github.com/quic-go/masque-go` v0.3 into `transport/masquetr`
+      as a real listener + dialer pair. Server is an HTTP/3 endpoint
+      whose CONNECT-UDP handler forwards every datagram to a
+      configured loopback inner-QUIC listener; client composes
+      outer-QUIC + HTTP/3 + CONNECT-UDP + inner-QUIC in one Dial and
+      returns the inner stream. Outer `EnableDatagrams` plus a
+      1350-byte `InitialPacketSize` are required so the inner QUIC's
+      1200 MTU survives the proxy hop. End-to-end roundtrip test in
+      `roundtrip_test.go`.
 - [x] **Phase 6 (release machinery)** — tag-triggered cross-platform
       `release.yml` workflow that builds the full asset matrix,
       signs every artefact with cosign keyless via the workflow's

@@ -200,7 +200,17 @@ func buildListener(t config.ServerTransport, serverStaticPub []byte, acmeMgr *ac
 			Logger:     slog.Default(),
 		})
 	case config.TransportMASQUE:
-		return nil, masquetr.ErrNotImplemented
+		if t.TargetAddr == "" {
+			return nil, fmt.Errorf("masque transport: target_addr is required (loopback host:port of the inner QUIC listener)")
+		}
+		return masquetr.Listen(masquetr.ListenConfig{
+			Addr:       t.Listen,
+			Path:       t.Path,
+			TargetAddr: t.TargetAddr,
+			CertFile:   t.CertFile,
+			KeyFile:    t.KeyFile,
+			Logger:     slog.Default(),
+		})
 	default:
 		return nil, fmt.Errorf("unknown transport type %q", t.Type)
 	}
