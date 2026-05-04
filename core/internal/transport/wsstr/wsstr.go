@@ -291,7 +291,7 @@ func Dial(ctx context.Context, addr string, cfg DialConfig) (transport.Conn, err
 		Path:   path,
 	}
 
-	c, _, err := websocket.Dial(dialCtx, u.String(), &websocket.DialOptions{
+	c, resp, err := websocket.Dial(dialCtx, u.String(), &websocket.DialOptions{
 		HTTPClient: httpClient,
 		// Mimic a browser-ish Origin to look like a normal upgrade.
 		HTTPHeader: http.Header{
@@ -299,6 +299,12 @@ func Dial(ctx context.Context, addr string, cfg DialConfig) (transport.Conn, err
 			"User-Agent": []string{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"},
 		},
 	})
+	// coder/websocket guarantees resp.Body is http.NoBody after a
+	// successful Dial; closing it is a no-op but keeps bodyclose
+	// happy and removes a real footgun on error paths.
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("wsstr: ws dial: %w", err)
 	}

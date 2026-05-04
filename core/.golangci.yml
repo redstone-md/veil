@@ -22,6 +22,25 @@ linters:
     - unconvert
     - gocritic
   settings:
+    errcheck:
+      # Many Close() / Write-to-Stdout calls in cleanup paths are
+      # intentionally unchecked. Whitelisting these idioms is
+      # preferable to littering the codebase with `_ = x.Close()`
+      # noise. See https://github.com/kisielk/errcheck for the
+      # function-name syntax.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Listener).Close
+        - (net.Conn).Close
+        - (*net.TCPConn).CloseWrite
+        - (*os.File).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - (io.Writer).Write
+        - (*os.File).Write
     misspell:
       locale: US
     revive:
