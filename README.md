@@ -67,8 +67,17 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       Reality ClientHello, share-link) plus a nightly `fuzz.yml`
       workflow; an `AUDIT_PREP.md` checklist that scopes the
       upcoming external review.
-- [ ] **Phase 5.5** — HTTP/3 MASQUE transport, edge backends
-      (Deno / Fly), full Sigstore-verified auto-update.
+- [x] **Phase 5.5 (auto-update + skeletons)** — `veil update`
+      subcommand: GitHub releases query, platform asset download,
+      SHA-256 checksum verification, atomic binary replace
+      (Unix rename / Windows aside-stage). MASQUE transport
+      skeleton + ADR-0003 documenting the design. Edge-backend
+      reference Deno Deploy worker (`deploy/edge/deno/`) +
+      ADR-0004 documenting the trust model and Fly.io variant
+      plan.
+- [ ] **Phase 5.6** — Functional MASQUE implementation, Fly.io
+      edge variant, Sigstore (cosign keyless) signature
+      verification on auto-updates.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
 
 APIs, configuration formats, and the wire protocol are unstable and will
