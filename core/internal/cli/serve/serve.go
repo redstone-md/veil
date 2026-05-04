@@ -1,7 +1,13 @@
+// Veil VPN
+// Copyright 2026 Veil VPN Project Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+
 // Package serve wires the `veil serve` subcommand: load server
-// configuration, bring up a QUIC listener, perform the Noise XK
-// responder role for each incoming connection, and (in v0) echo
-// the first encrypted message back as a smoke test.
+// configuration, listen for QUIC connections, run a Noise XK
+// responder handshake on each, then run a multiplexed VWP/1
+// session that forwards every accepted stream to its requested
+// upstream target.
 package serve
 
 import (
@@ -16,6 +22,7 @@ import (
 
 	"github.com/redstone-md/veil/core/internal/config"
 	"github.com/redstone-md/veil/core/internal/crypto"
+	"github.com/redstone-md/veil/core/internal/forward"
 	"github.com/redstone-md/veil/core/internal/session"
 	"github.com/redstone-md/veil/core/internal/transport"
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
@@ -82,11 +89,11 @@ func run(ctx context.Context, cfgPath string) error {
 			slog.Error("accept failed", "err", err)
 			continue
 		}
-		go handleConn(conn, *staticKP, authorized)
+		go handleConn(ctx, conn, *staticKP, authorized)
 	}
 }
 
-func handleConn(conn transport.Conn, staticKP crypto.Keypair, authorized map[string]struct{}) {
+func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypair, authorized map[string]struct{}) {
 	defer conn.Close()
 	logger := slog.With("peer", conn.RemoteAddr().String())
 
@@ -102,32 +109,33 @@ func handleConn(conn transport.Conn, staticKP crypto.Keypair, authorized map[str
 	}
 	logger.Info("client authenticated", "client_pubkey_b64", peerB64)
 
-	// v0 smoke-test: read one ciphertext, decrypt, echo back encrypted.
-	const maxMsg = 64 * 1024
-	buf := make([]byte, maxMsg)
-	n, err := conn.Read(buf)
-	if err != nil {
-		logger.Warn("read after handshake failed", "err", err)
-		return
-	}
-	plaintext, err := established.Recv.Decrypt(nil, nil, buf[:n])
-	if err != nil {
-		logger.Warn("decrypt failed", "err", err)
-		return
-	}
-	logger.Info("received encrypted message", "bytes", len(plaintext))
+	secure := session.NewSecureChannel(conn, established)
+	sess := session.New(secure, session.Options{Role: session.RoleServer, Logger: logger})
 
-	reply := []byte("veil-server: hello")
-	cipher, err := established.Send.Encrypt(nil, nil, reply)
-	if err != nil {
-		logger.Warn("reply encrypt failed", "err", err)
-		return
+	connCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- sess.Run() }()
+
+	fwd := forward.NewServer(sess, logger, nil)
+	fwdErr := make(chan error, 1)
+	go func() { fwdErr <- fwd.Run(connCtx) }()
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			logger.Info("session ended", "err", err)
+		} else {
+			logger.Info("session ended cleanly")
+		}
+	case err := <-fwdErr:
+		if err != nil {
+			logger.Info("forward ended", "err", err)
+		}
+	case <-ctx.Done():
 	}
-	if _, err := conn.Write(cipher); err != nil {
-		logger.Warn("reply write failed", "err", err)
-		return
-	}
-	logger.Info("session smoke test ok")
+	_ = sess.Close()
 }
 
 func loadAuthorizedKeys(path string) (map[string]struct{}, error) {
