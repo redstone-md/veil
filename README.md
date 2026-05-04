@@ -22,11 +22,12 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
 
 - [x] **Phase 0** — Foundation: spec, threat model, ADRs, QUIC + Noise XK skeleton.
 - [x] **Phase 1** — Core MVP: VWP/1 frames, multiplexed sessions, SOCKS5 client,
-      end-to-end TCP forwarding, Docker Compose deploy. A client run with
-      `veil connect` exposes a local SOCKS5 proxy that tunnels arbitrary
-      TCP traffic through a `veil serve` instance.
-- [ ] **Phase 2** — Anti-DPI: TLS-Reality and WSS transports, uTLS fingerprint
-      mimicry, dynamic SNI pool, decoy traffic.
+      end-to-end TCP forwarding, Docker Compose deploy.
+- [x] **Phase 2** — Anti-DPI layer: WebSocket-over-TLS transport, uTLS browser
+      fingerprint mimicry, multi-transport listener / fall-back dialer, dynamic
+      SNI pool, cover-traffic decoy engine. Reality transport ships as a
+      design + skeleton (functional implementation is the next milestone).
+- [ ] **Phase 2.5** — Reality transport functional implementation.
 - [ ] **Phase 3** — Self-host UX: Tauri installer, embedded admin UI, ACME,
       user management.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
@@ -46,14 +47,15 @@ that ships a state-of-the-art anti-censorship core.
 
 | Capability                             | Veil | Amnezia | Outline | XRay-core |
 |----------------------------------------|:----:|:-------:|:-------:|:---------:|
-| One-click GUI server install           |  ✅  |   ✅    |    ✅   |     ❌    |
+| One-click GUI server install           |  🟡  |   ✅    |    ✅   |     ❌    |
 | Multi-transport adaptive runtime       |  ✅  |   ❌    |    ❌   |     🟡    |
 | Dynamic SNI pool per user              |  ✅  |   ❌    |    ❌   |     ❌    |
 | Decoy traffic engine                   |  ✅  |   ❌    |    ❌   |     ❌    |
-| Statistical traffic mimicry            |  ✅  |   ❌    |    ❌   |     ❌    |
-| Edge-function backend support          |  ✅  |   ❌    |    ❌   |     ❌    |
+| uTLS browser fingerprint mimicry       |  ✅  |   ❌    |    ❌   |     ✅    |
+| Statistical traffic mimicry            |  🟡  |   ❌    |    ❌   |     ❌    |
+| Edge-function backend support          |  🟡  |   ❌    |    ❌   |     ❌    |
 | Zero phone-home / no central control   |  ✅  |   ✅    |    ❌   |     ✅    |
-| Stable C-API for third-party apps      |  ✅  |   ❌    |    ❌   |     🟡    |
+| Stable C-API for third-party apps      |  🟡  |   ❌    |    ❌   |     🟡    |
 
 (✅ = supported, 🟡 = partial / via add-ons, ❌ = not supported.)
 
