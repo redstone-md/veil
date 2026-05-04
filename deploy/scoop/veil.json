@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/schema.json",
+  "version": "0.0.0-placeholder",
+  "description": "Self-hosted, censorship-resistant VPN platform.",
+  "homepage": "https://github.com/redstone-md/veil",
+  "license": "Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/redstone-md/veil/releases/download/v0.0.0-placeholder/veil-windows-amd64.exe",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bin": [
+        ["veil-windows-amd64.exe", "veil"]
+      ]
+    },
+    "arm64": {
+      "url": "https://github.com/redstone-md/veil/releases/download/v0.0.0-placeholder/veil-windows-arm64.exe",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bin": [
+        ["veil-windows-arm64.exe", "veil"]
+      ]
+    }
+  },
+  "checkver": {
+    "github": "https://github.com/redstone-md/veil"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/redstone-md/veil/releases/download/v$version/veil-windows-amd64.exe"
+      },
+      "arm64": {
+        "url": "https://github.com/redstone-md/veil/releases/download/v$version/veil-windows-arm64.exe"
+      }
+    },
+    "hash": {
+      "url": "$baseurl/checksums.txt"
+    }
+  }
+}

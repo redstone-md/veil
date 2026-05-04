@@ -80,6 +80,15 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       the secret setup.
 - [ ] **Phase 3.9** — Direct OAuth push from the installer to
       Deno Deploy / Fly.io APIs.
+- [x] **Phase 6.5 (distribution channels)** — release.yml now
+      builds + pushes a multi-arch (`linux/amd64,linux/arm64`)
+      Veil server image to `ghcr.io/redstone-md/veil:vX.Y.Z` and
+      `:latest` on every tag, with cosign-keyless signing of the
+      image manifest. Homebrew formula skeleton at
+      `deploy/homebrew/veil.rb` and Scoop manifest at
+      `deploy/scoop/veil.json` (with checkver / autoupdate blocks)
+      land alongside docs walking maintainers through the per-
+      release update of the tap and bucket repos.
 - [x] **Phase 4 (CLI/SDK half)** — Refactor of the connect path into
       a reusable `internal/client.Client`, a CGO-built libveil shared
       library exposing a stable C ABI (`core/pkg/cgo` +
