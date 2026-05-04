@@ -59,6 +59,16 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
 - [ ] **Phase 4.5** — Desktop client (Tauri), mobile clients
       (React Native / NetworkExtension / VpnService), Node bindings
       via NAPI.
+- [x] **Phase 5 (hardening half)** — statistical mimicry profiles
+      (browse / video / messaging / search) wired into the data path
+      via packet padding + inter-arrival jitter; multi-listen per
+      transport so a single config entry can bind several IPs/ports;
+      Go-native fuzz tests for the binary parsers (frame codec,
+      Reality ClientHello, share-link) plus a nightly `fuzz.yml`
+      workflow; an `AUDIT_PREP.md` checklist that scopes the
+      upcoming external review.
+- [ ] **Phase 5.5** — HTTP/3 MASQUE transport, edge backends
+      (Deno / Fly), full Sigstore-verified auto-update.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
 
 APIs, configuration formats, and the wire protocol are unstable and will
