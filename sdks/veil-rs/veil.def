@@ -1,0 +1,12 @@
+LIBRARY veil.dll
+EXPORTS
+    veil_create
+    veil_start
+    veil_stop
+    veil_destroy
+    veil_get_metrics
+    veil_version_string
+    veil_free_string
+    veil_mobile_start_with_tun
+    veil_ne_start
+    veil_ne_ingest_packet

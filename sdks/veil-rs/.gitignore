@@ -1,3 +1,11 @@
 target/
 Cargo.lock
 **/*.rs.bk
+
+# cgo-emitted header (regenerated alongside the libveil shared
+# library; the canonical hand-maintained copy lives at
+# core/pkg/cgo/include/veil.h)
+veil.h
+# MSVC import library; regenerated from veil.def via
+#   dlltool --input-def veil.def --dllname veil.dll --output-lib veil.lib
+veil.lib
