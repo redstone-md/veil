@@ -36,7 +36,11 @@
     "longDescription": "Generates server configuration and (in upcoming revisions) drives the remote install of a Veil VPN server.",
     "targets": "all",
     "icon": [
-      "icons/icon.png"
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.ico"
     ]
   }
 }
