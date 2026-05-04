@@ -1,0 +1,217 @@
+name: Release
+
+# Triggered by pushing a `vX.Y.Z` tag. Builds the cross-platform
+# binaries, the cgo-built libveil shared libraries, signs every
+# artefact with cosign keyless via the workflow's GitHub OIDC
+# identity, generates an SBOM, and uploads everything to a GitHub
+# Release.
+#
+# To cut a release locally:
+#
+#     git tag -a v0.1.0 -m "v0.1.0"
+#     git push origin v0.1.0
+#
+# Inspect the run at the Actions tab and the resulting Release at
+# the Releases tab.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write   # upload Release assets
+  id-token: write   # cosign keyless OIDC
+  attestations: write
+
+env:
+  GO_FLAGS: "-trimpath -buildvcs=false"
+
+jobs:
+  meta:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.set.outputs.version }}
+      commit:  ${{ steps.set.outputs.commit }}
+      date:    ${{ steps.set.outputs.date }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: set
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.tag }}"
+          else
+            VERSION="${GITHUB_REF##*/}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build / veil-${{ matrix.target }}
+    runs-on: ubuntu-latest
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+          - target: darwin-amd64
+            goos: darwin
+            goarch: amd64
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+          - target: windows-amd64
+            goos: windows
+            goarch: amd64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache: true
+          cache-dependency-path: core/go.sum
+      - name: build
+        working-directory: core
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p ../dist
+          NAME="veil-${{ matrix.target }}${{ matrix.ext }}"
+          go build $GO_FLAGS \
+            -ldflags "-s -w \
+              -X github.com/redstone-md/veil/core/internal/buildinfo.Version=${{ needs.meta.outputs.version }} \
+              -X github.com/redstone-md/veil/core/internal/buildinfo.Commit=${{ needs.meta.outputs.commit }} \
+              -X github.com/redstone-md/veil/core/internal/buildinfo.Date=${{ needs.meta.outputs.date }}" \
+            -o "../dist/$NAME" \
+            ./cmd/veil
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veil-${{ matrix.target }}
+          path: dist/veil-${{ matrix.target }}${{ matrix.ext }}
+          retention-days: 7
+
+  libveil:
+    name: build / libveil-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            ext: so
+            target: linux-amd64
+          - os: macos-latest
+            ext: dylib
+            target: darwin-arm64
+          - os: windows-latest
+            ext: dll
+            target: windows-amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache: true
+          cache-dependency-path: core/go.sum
+      - name: install MSYS2 mingw (Windows only)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+      - name: build libveil
+        working-directory: core
+        env:
+          CGO_ENABLED: 1
+        run: |
+          mkdir -p ../dist
+          go build $GO_FLAGS -buildmode=c-shared \
+            -ldflags "-s -w \
+              -X github.com/redstone-md/veil/core/internal/buildinfo.Version=${{ needs.meta.outputs.version }} \
+              -X github.com/redstone-md/veil/core/internal/buildinfo.Commit=${{ needs.meta.outputs.commit }} \
+              -X github.com/redstone-md/veil/core/internal/buildinfo.Date=${{ needs.meta.outputs.date }}" \
+            -o ../dist/libveil-${{ matrix.target }}.${{ matrix.ext }} \
+            ./pkg/cgo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libveil-${{ matrix.target }}
+          path: |
+            dist/libveil-${{ matrix.target }}.${{ matrix.ext }}
+            core/pkg/cgo/include/veil.h
+          retention-days: 7
+
+  package:
+    name: Sign + assemble release bundle
+    needs: [meta, build, libveil]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-staging
+      - name: flatten artefacts
+        run: |
+          mkdir -p dist
+          find dist-staging -type f -name 'veil-*' -exec cp {} dist/ \;
+          find dist-staging -type f -name 'libveil-*' -exec cp {} dist/ \;
+          find dist-staging -type f -name 'veil.h' -exec cp {} dist/ \;
+          ls -la dist
+      - name: generate SHA-256 checksums
+        working-directory: dist
+        run: |
+          sha256sum veil-* libveil-* > checksums.txt
+          cat checksums.txt
+      - name: install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: install syft (SBOM)
+        uses: anchore/sbom-action/download-syft@v0
+      - name: sign every artifact (keyless)
+        working-directory: dist
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          for f in veil-* libveil-* checksums.txt; do
+            cosign sign-blob --yes --bundle "${f}.sigstore" "$f"
+          done
+          ls -la *.sigstore
+      - name: generate SBOM (per-binary)
+        working-directory: dist
+        run: |
+          for f in veil-*; do
+            case "$f" in
+              *.sigstore|*.sbom.json) continue ;;
+            esac
+            syft "$f" -o spdx-json > "${f}.sbom.json"
+          done
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.version }}
+          name: ${{ needs.meta.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/veil-*
+            dist/libveil-*
+            dist/veil.h
+            dist/checksums.txt
+            dist/*.sigstore
+            dist/*.sbom.json
