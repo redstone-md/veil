@@ -44,11 +44,17 @@ const (
 // before the connection is dropped.
 const negotiationTimeout = 30 * time.Second
 
+// ByteCounter is invoked by the SOCKS5 server's per-flow pipe with
+// the number of bytes shuttled in each direction. nil is allowed and
+// means "don't account."
+type ByteCounter func(tx, rx int64)
+
 // SOCKS5Server accepts SOCKS5 client connections and forwards each
 // CONNECT request through a Veil session.
 type SOCKS5Server struct {
-	sess   *session.Session
-	logger *slog.Logger
+	sess    *session.Session
+	logger  *slog.Logger
+	counter ByteCounter
 }
 
 // NewSOCKS5 returns a server that maps incoming SOCKS5 CONNECTs onto
@@ -58,6 +64,14 @@ func NewSOCKS5(sess *session.Session, logger *slog.Logger) *SOCKS5Server {
 		logger = slog.Default()
 	}
 	return &SOCKS5Server{sess: sess, logger: logger}
+}
+
+// SetByteCounter installs a per-flow byte accounting callback. The
+// counter is invoked once per byte direction with deltas after each
+// pipe iteration, so an atomic adder on the receiver side is the
+// natural shape.
+func (s *SOCKS5Server) SetByteCounter(c ByteCounter) {
+	s.counter = c
 }
 
 // ListenAndServe binds addr (e.g. "127.0.0.1:1080") and serves until
@@ -110,7 +124,7 @@ func (s *SOCKS5Server) handle(ctx context.Context, c net.Conn) {
 		return
 	}
 
-	pipe(st, c)
+	pipe(st, c, s.counter)
 }
 
 // socks5Negotiate runs the SOCKS5 handshake and returns the requested
@@ -213,19 +227,27 @@ func writeSocksReply(c net.Conn, rep byte) error {
 }
 
 // pipe runs full-duplex io.Copy between a Veil stream and a TCP
-// connection. Mirrors forward.pipe; kept independent to avoid an
-// import cycle and to allow proxy-specific tuning later.
-func pipe(stream io.ReadWriteCloser, downstream net.Conn) {
+// connection, optionally accounting for the bytes shuttled in each
+// direction via counter (nil = no accounting).
+func pipe(stream io.ReadWriteCloser, downstream net.Conn, counter ByteCounter) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(stream, downstream)
+		// downstream → stream is the client's outbound direction (TX).
+		n, _ := io.Copy(stream, downstream)
+		if counter != nil && n > 0 {
+			counter(n, 0)
+		}
 		_ = stream.Close()
 	}()
 	go func() {
 		defer wg.Done()
-		_, _ = io.Copy(downstream, stream)
+		// stream → downstream is the server's response (RX).
+		n, _ := io.Copy(downstream, stream)
+		if counter != nil && n > 0 {
+			counter(0, n)
+		}
 		if tc, ok := downstream.(*net.TCPConn); ok {
 			_ = tc.CloseWrite()
 		}

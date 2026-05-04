@@ -188,6 +188,14 @@ func (c *Client) Run(ctx context.Context) error {
 
 	socksLogger := c.logger
 	socksProxy := proxy.NewSOCKS5(sess, socksLogger)
+	socksProxy.SetByteCounter(func(tx, rx int64) {
+		if tx > 0 {
+			c.bytesTx.Add(tx)
+		}
+		if rx > 0 {
+			c.bytesRx.Add(rx)
+		}
+	})
 	socksErr := make(chan error, 1)
 	go func() { socksErr <- socksProxy.ListenAndServe(ctx, socksAddr) }()
 
@@ -277,7 +285,7 @@ func (c *Client) fail(stage string, err error) error {
 }
 
 func (c *Client) trafficTicker(ctx context.Context, stop chan struct{}) {
-	t := time.NewTicker(5 * time.Second)
+	t := time.NewTicker(1 * time.Second)
 	defer t.Stop()
 	for {
 		select {
