@@ -1,0 +1,19 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-env --allow-net --watch worker.ts",
+    "deploy": "deployctl deploy --project=YOUR_PROJECT --prod worker.ts"
+  },
+  "fmt": {
+    "options": {
+      "lineWidth": 100,
+      "indentWidth": 2,
+      "semiColons": true,
+      "singleQuote": false
+    }
+  },
+  "lint": {
+    "rules": {
+      "tags": ["recommended"]
+    }
+  }
+}
