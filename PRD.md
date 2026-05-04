@@ -1,12 +1,72 @@
 # Product Requirements Document — Veil
 
-**Версия:** 3.1.0
-**Статус:** Draft for Implementation
-**Дата:** 2026-05-04
-**Тип продукта:** Self-hosted OSS VPN с anti-censorship ядром
-**Целевые рынки:** РФ, Китай, Иран, Беларусь, любые страны с активным DPI/SNI-фильтрацией
-**Лицензия:** Apache License 2.0 (commercial use OK, требуется attribution через NOTICE)
+**Version:** 3.2.0
+**Status:** Draft for Implementation (Pre-Alpha)
+**Date:** 2026-05-05
+**Product type:** Self-hosted OSS VPN with an anti-censorship core
+**Target locales:** RU, CN, IR, BY — any network with active DPI / SNI filtering
+**License:** Apache License 2.0 (commercial use permitted; attribution via NOTICE required)
 **Funding model:** Donations only (OpenCollective + GitHub Sponsors)
+
+---
+
+## 0. Read-this-first (English overview)
+
+The body of this document is in **Russian** because that is the working language of
+the maintainer team. This first section gives a one-page English summary so external
+reviewers, integrators, and translators can engage without reading 1200 lines of
+Russian prose. A full English translation is planned for the v0.1.0 release window.
+
+### What Veil is
+
+A self-hosted VPN platform whose threat model is **active, state-scale DPI**
+(Russia's TSPU, China's Great Firewall, Iran's smart-filtering layer). The
+design principle is: **make blocking expensive enough to break the legitimate web.**
+
+Concretely:
+
+- **Multiple wire transports** chosen at runtime — QUIC, WebSocket-over-TLS,
+  TLS-Reality (auth-tag-bearing TLS 1.3 indistinguishable from legitimate
+  CDN traffic), HTTP/3 MASQUE. The client races them all and picks the
+  fastest handshake; if one is blocked, the others win without a timeout.
+- **uTLS browser fingerprint mimicry** so the on-the-wire ClientHello is
+  bit-identical to a real Chrome / Firefox / Safari hello.
+- **Statistical traffic mimicry** (packet padding + inter-arrival jitter
+  matching browse / video / messaging / search profiles).
+- **Cover-traffic decoy engine** — periodic real HTTPS GETs to a regional
+  weighted SNI pool, so the client looks like a normal browser even at rest.
+- **Self-hosted server**: single Go binary, SQLite user store, embedded
+  admin HTTP API, ACME-provisioned TLS, shipping in three flavours
+  (single binary, Docker compose image, edge-worker bundle for Deno
+  Deploy / Fly.io).
+- **Native clients**: Tauri-based desktop GUI (Windows / macOS / Linux),
+  React Native mobile (iOS NEPacketTunnelProvider + Android VpnService),
+  Rust / Python / Node SDKs, raw C ABI.
+- **Operator GUI installer**: same Tauri stack, drives Docker / SSH / edge
+  deploy flows; once a server is up the same installer becomes its
+  manager (admin REST client, user CRUD, share-link emission).
+
+### What Veil deliberately is *not*
+
+- A commercial VPN service. There is no central infrastructure, no SaaS, no
+  billing. Every server is run by an end user or by a small operator for
+  their own community.
+- A circumvention tool that hides the *fact* of VPN usage from the user's
+  ISP. It hides the fact of Veil usage from passive DPI; it does not pretend
+  the connection is plain HTTP.
+- A drop-in replacement for OpenVPN / WireGuard. Those are general-purpose
+  tunnelling protocols. Veil is specifically anti-censorship; the cost of
+  the disguise is throughput overhead and operational complexity.
+
+### Pre-alpha disclaimer
+
+The protocol design is documented and the code is reviewable, but **no
+external security audit has happened yet** (audit kickoff is part of the
+v0.1.0 milestone, funding-permitting). Until then every cryptographic
+claim is "the design says so", not "an independent reviewer confirmed it".
+
+The roadmap and per-phase progress live in the README. The Russian text
+below is the source of truth for everything else.
 
 ---
 

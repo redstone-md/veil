@@ -4,6 +4,13 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Status: Pre-Alpha](https://img.shields.io/badge/Status-Pre--Alpha-orange.svg)](#project-status)
+[![Audit: Pending](https://img.shields.io/badge/External_audit-Pending-yellow.svg)](docs/AUDIT_PREP.md)
+
+> ⚠️ **Pre-alpha. No external security audit yet. Do not use this for anything you can't afford to leak.**
+>
+> The protocol design is documented and the code is reviewable, but it has not been validated by
+> an independent reviewer. Treat it as a research / development artefact until the v0.1.0-alpha.1
+> tag and the first audit report ship together.
 
 Veil is an open-source VPN platform built for environments with active deep-packet inspection
 (Russia, China, Iran, and similar). It is designed around a single principle:
@@ -11,6 +18,24 @@ Veil is an open-source VPN platform built for environments with active deep-pack
 
 This repository contains the protocol core, server, command-line client, GUI installer,
 desktop and mobile client apps, deployment recipes, and SDK bindings.
+
+## Known limitations (pre-alpha)
+
+The roadmap below tracks what's wired and what isn't. As of this revision, the rough shape:
+
+- ✅ **Server + CLI client + SDKs** are exercised end-to-end against a real VPS — three
+  transports (Reality / WSS / QUIC) plus the MASQUE roundtrip, multi-stream multiplex,
+  cosign-signed releases.
+- ⚠️ **Desktop GUI client** (Tauri 2) functions in SOCKS5 mode end-to-end. The system-wide
+  TUN mode is wired through Wintun but has not been exercised on a wide hardware matrix yet.
+- ⚠️ **Mobile clients** (React Native + iOS NEPacketTunnelProvider + Android VpnService)
+  are scaffolded with the platform-specific TUN code wired into libveil; bring-up against
+  Xcode / Android NDK builds is the operator's job until we ship signed binaries.
+- ⚠️ **Per-app split tunneling on Windows** is not a thing yet (would require a signed
+  kernel driver). The desktop instead supports CIDR-level split routing — game IPs / LAN
+  ranges that bypass the tunnel without kernel-mode work.
+- ❌ **External security audit** — pending. Funding-gated. Until then every cryptographic
+  claim is "the design says so", not "an independent auditor confirmed it".
 
 ---
 
