@@ -162,6 +162,17 @@ int  veil_mobile_start_with_tun(VeilHandle handle, int tun_fd, VeilEventCallback
 int  veil_ne_start(VeilHandle handle, VeilEventCallback cb, VeilEmitPacketCallback emit, void* user_data);
 int  veil_ne_ingest_packet(VeilHandle handle, const uint8_t* data, int len, int family);
 
+/*
+ * Windows desktop: open a Wintun adapter named adapter_name and
+ * attach it through the gVisor netstack. Requires Administrator
+ * privileges. wintun.dll must sit next to the loading binary or on
+ * %PATH%. Returns the same error codes as veil_start. Once the call
+ * returns success, the calling host is responsible for assigning the
+ * adapter an IPv4 address and inserting the default route — libveil
+ * does not touch routing or addresses.
+ */
+int  veil_desktop_start_with_wintun(VeilHandle handle, const char* adapter_name, int mtu, VeilEventCallback cb, void* user_data);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

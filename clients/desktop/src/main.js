@@ -42,6 +42,7 @@ const state = {
     mimicry: "",
     decoy: false,
     notifications: true,
+    mode: "socks5", // socks5 (default) | tun (system-wide, coming soon)
   },
   log: [],
   update: null,
@@ -99,7 +100,6 @@ function render() {
 }
 
 function renderHome(host) {
-  host.append(renderTopbar());
   for (const node of renderHero()) host.append(node);
   host.append(renderDrawer());
 }
@@ -108,15 +108,38 @@ function renderTitlebar() {
   const drag = el("div", { class: "tb-drag", "data-tauri-drag-region": "" },
     el("div", { class: "tb-brand" },
       el("div", { class: "tb-mark" }),
-      el("span", {}, "Veil"),
+      el("span", {}, titlebarLabel()),
     ),
   );
+  const appActions = el("div", { class: "tb-appactions" });
+  if (state.view === "main") {
+    appActions.append(
+      tbActionBtn("paste", "Paste veil:// link", quickPasteLink),
+      tbActionBtn("gear",  "Settings",           () => { state.view = "settings"; render(); }),
+    );
+  } else {
+    appActions.append(
+      tbActionBtn("back", "Back", () => { state.view = "main"; render(); }),
+    );
+  }
   const ctrls = el("div", { class: "tb-ctrls" },
     el("button", { class: "tb-btn", title: "Minimize", onclick: () => appWindow.minimize() }, tbIcon("min")),
     el("button", { class: "tb-btn", title: "Maximize", onclick: () => appWindow.toggleMaximize() }, tbIcon("max")),
     el("button", { class: "tb-btn close", title: "Hide to tray", onclick: () => appWindow.hide() }, tbIcon("close")),
   );
-  return el("div", { class: "titlebar" }, drag, ctrls);
+  return el("div", { class: "titlebar" }, drag, appActions, ctrls);
+}
+
+function titlebarLabel() {
+  switch (state.view) {
+    case "settings": return "Settings";
+    case "editor":   return "Edit server";
+    default:         return "Veil";
+  }
+}
+
+function tbActionBtn(kind, title, onclick) {
+  return el("button", { class: "tb-actbtn", title, onclick }, iconSVG(kind));
 }
 
 function tbIcon(kind) {
@@ -249,8 +272,13 @@ function renderDrawer() {
 // --- settings page ---
 
 function renderSettings(host) {
-  const back = iconBtn("back", "Back", () => { state.view = "main"; render(); });
-  const head = el("div", { class: "topbar" }, back, el("div", { class: "brand" }, "Settings"));
+  const mode = el("div", { class: "card" },
+    cardTitle("Tunnel mode"),
+    el("div", { class: "modegrid" },
+      modeCard("socks5", "SOCKS5 proxy", "Per-app: configure your browser / app to use 127.0.0.1:1080. Works without admin rights.", state.settings.mode === "socks5"),
+      modeCard("tun",    "System-wide TUN", "All traffic transparently via a Wintun adapter. Needs Administrator + wintun.dll next to the app.", state.settings.mode === "tun"),
+    ),
+  );
 
   const general = el("div", { class: "card" },
     cardTitle("General"),
@@ -297,13 +325,29 @@ function renderSettings(host) {
     ),
   );
 
-  host.append(head, general, dpi, updateBox);
+  host.append(mode, general, dpi, updateBox);
+}
+
+function modeCard(value, title, body, active) {
+  const click = async () => {
+    if (state.status === "connected" || state.status === "connecting") {
+      toast("Disconnect before switching tunnel mode.", "error");
+      return;
+    }
+    state.settings.mode = value;
+    await persistSettings();
+    render();
+  };
+  return el("button", {
+    class: "modecard" + (active ? " active" : ""),
+    onclick: click,
+  },
+    el("div", { class: "modecard-title" }, title),
+    el("div", { class: "modecard-body" }, body),
+  );
 }
 
 function renderEditor(host) {
-  const back = iconBtn("back", "Back", () => { state.view = "main"; render(); });
-  const head = el("div", { class: "topbar" }, back, el("div", { class: "brand" }, "Edit server"));
-
   const a = activeProfile();
   const nameInput = el("input", {
     type: "text",
@@ -333,7 +377,7 @@ function renderEditor(host) {
     ta,
     el("div", { class: "row" }, save),
   );
-  host.append(head, card);
+  host.append(card);
 }
 
 // --- helpers ---
@@ -468,9 +512,15 @@ async function connect() {
   state.status = "connecting";
   state.message = "starting client…";
   state.bytesTx = 0; state.bytesRx = 0;
-  pushLog("connect requested");
+  pushLog(`connect requested (mode=${state.settings.mode})`);
   try {
-    await invoke("veil_start", { configText: cfg });
+    if (state.settings.mode === "tun") {
+      await invoke("tun_start", { configText: cfg });
+      // tun_start completes once Wintun is up + routes are installed.
+      // libveil's EventConnected will arrive on the event channel.
+    } else {
+      await invoke("veil_start", { configText: cfg });
+    }
   } catch (e) {
     state.status = "error";
     state.message = String(e);
@@ -482,8 +532,27 @@ async function connect() {
 
 async function disconnect() {
   pushLog("disconnect requested");
-  try { await invoke("veil_stop"); }
-  catch (e) { toast("Disconnect failed: " + e, "error"); pushLog("disconnect failed: " + e); }
+  try {
+    if (state.settings.mode === "tun") {
+      await invoke("tun_stop");
+    } else {
+      await invoke("veil_stop");
+    }
+    // libveil's EventDisconnected races against the SDK Drop that
+    // clears the C-side callback slot, so the event often never
+    // reaches the JS layer. Once stop returns OK the session is
+    // gone — flip the UI ourselves.
+    state.status = "stopped";
+    state.startedAt = 0;
+    state.transport = "";
+    state.remote = "";
+    state.message = "";
+    pushLog("stopped");
+    render();
+  } catch (e) {
+    toast("Disconnect failed: " + e, "error");
+    pushLog("disconnect failed: " + e);
+  }
 }
 
 async function doCheckUpdate() {
@@ -522,9 +591,21 @@ listen("veil-event", (msg) => {
   const e = msg.payload || {};
   if (e.transport) state.transport = e.transport;
   if (e.remote) state.remote = e.remote;
+  const txBumped = typeof e.bytes_tx === "number" && e.bytes_tx !== state.bytesTx;
+  const rxBumped = typeof e.bytes_rx === "number" && e.bytes_rx !== state.bytesRx;
   if (typeof e.bytes_tx === "number") state.bytesTx = e.bytes_tx;
   if (typeof e.bytes_rx === "number") state.bytesRx = e.bytes_rx;
   if (e.message) state.message = e.message;
+  // Brief flash on the stat values when bytes change, so users see
+  // throughput "breathing" at a glance.
+  if (txBumped || rxBumped) {
+    requestAnimationFrame(() => {
+      document.querySelectorAll(".statv").forEach((n) => {
+        n.classList.add("bump");
+        setTimeout(() => n.classList.remove("bump"), 220);
+      });
+    });
+  }
   switch (e.type) {
     case 1:
       state.status = "connected";
@@ -541,7 +622,9 @@ listen("veil-event", (msg) => {
       state.startedAt = 0;
       pushLog("error: " + (e.message || "?"));
       break;
-    case 4: pushLog(`traffic tx=${fmtBytes(e.bytes_tx)} rx=${fmtBytes(e.bytes_rx)}`); break;
+    case 4:
+      // skip the log spam — bytes already update in the stats row
+      break;
     case 5: pushLog(`transport switch: ${e.transport}`); break;
   }
   render();

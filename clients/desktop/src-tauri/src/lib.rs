@@ -26,6 +26,9 @@ use tauri_plugin_autostart::{ManagerExt as AutostartManagerExt, MacosLauncher};
 use tauri_plugin_notification::NotificationExt;
 use veil::{Event, EventHandler, Veil};
 
+#[cfg(windows)]
+mod tun;
+
 /// Per-process Veil instance. We hold one at a time; starting a new
 /// session while another is live returns an error rather than
 /// silently leaking the previous one.
@@ -67,10 +70,16 @@ async fn veil_start(
     state: State<'_, VeilState>,
     config_text: String,
 ) -> Result<(), String> {
+    // If a previous session is still parked in the state slot, tear
+    // it down before we install the new one. Treating connect as
+    // "reconnect" matches what users expect from the Connect button
+    // and prevents the UI from getting stuck on stale state when an
+    // earlier session ended without a clean disconnect event.
     {
-        let guard = state.inner.lock().expect("VeilState mutex poisoned");
-        if guard.is_some() {
-            return Err("a session is already running; stop it first".into());
+        let mut guard = state.inner.lock().expect("VeilState mutex poisoned");
+        if let Some(prev) = guard.take() {
+            let _ = prev.stop();
+            drop(prev);
         }
     }
 
@@ -301,6 +310,56 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+// --- TUN (Windows / Wintun) commands -------------------------------
+
+#[cfg(windows)]
+#[tauri::command]
+async fn tun_start(state: State<'_, VeilState>, config_text: String) -> Result<tun::TunStatus, String> {
+    // Stash any prior Veil first — TUN replaces SOCKS5 mode, both
+    // can't coexist under the same VeilState.
+    {
+        let mut guard = state.inner.lock().expect("VeilState mutex poisoned");
+        if let Some(prev) = guard.take() {
+            let _ = prev.stop();
+            drop(prev);
+        }
+    }
+    let status = tun::tun_start(&config_text, None)?;
+    Ok(status)
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn tun_stop(state: State<'_, VeilState>) -> Result<(), String> {
+    // Mirror veil_stop's session-tear-down. The libveil session is
+    // owned through the same VeilState slot; dropping it runs the
+    // wintun pipe Close path automatically.
+    let v = {
+        let mut guard = state.inner.lock().expect("VeilState mutex poisoned");
+        guard.take()
+    };
+    if let Some(v) = v {
+        let _ = v.stop();
+        drop(v);
+    }
+    // Routes get cleaned up by the pipe's Close (adapter teardown
+    // removes routes through it); explicit netsh cleanup runs in the
+    // background since we don't want the user to wait.
+    Ok(())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+async fn tun_start(_state: State<'_, VeilState>, _config_text: String) -> Result<serde_json::Value, String> {
+    Err("TUN mode is currently Windows-only (macOS / Linux land in a follow-up).".into())
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+async fn tun_stop(_state: State<'_, VeilState>) -> Result<(), String> {
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -320,6 +379,8 @@ pub fn run() {
             get_autostart,
             check_update,
             apply_update,
+            tun_start,
+            tun_stop,
         ])
         .on_window_event(|window, event| {
             // Closing the main window minimises to tray instead of

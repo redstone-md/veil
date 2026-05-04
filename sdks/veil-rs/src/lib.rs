@@ -215,6 +215,15 @@ impl Veil {
         Ok(serde_json::from_str(&json)?)
     }
 
+    /// Raw libveil handle for callers that need to reach a
+    /// platform-specific entry point not yet wrapped here (e.g. the
+    /// Windows desktop's `veil_desktop_start_with_wintun`). The
+    /// returned value is only meaningful while this `Veil` instance
+    /// is alive — `Drop` invalidates it.
+    pub fn raw_handle(&self) -> u64 {
+        self.handle
+    }
+
     /// Library version metadata (does not require a started instance).
     pub fn library_version() -> Result<Version, Error> {
         let raw = unsafe { ffi::veil_version_string() };

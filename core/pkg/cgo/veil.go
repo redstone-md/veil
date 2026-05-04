@@ -94,8 +94,14 @@ type instance struct {
 	// Mobile-only: TUN pipes attached via veil_mobile_start_with_tun
 	// (Android, fdPipe) or veil_ne_start (iOS, cbPipe). Both are nil
 	// for desktop / CLI sessions.
+	//
+	// wintun is attached on Windows desktop sessions via
+	// veil_desktop_start_with_wintun; nil on every other path. Has
+	// type interface{} so this struct stays buildable on non-Windows
+	// platforms (the concrete type lives in mobile/wintun_windows.go).
 	fdPipe *mobile.FDPipe
 	cbPipe *mobile.CallbackPipe
+	wintun interface{ Close() }
 }
 
 // Registry of live instances keyed by handle.
@@ -247,14 +253,19 @@ func veil_destroy(handle C.uint64_t) {
 	inst.mu.Lock()
 	fd := inst.fdPipe
 	cb := inst.cbPipe
+	wt := inst.wintun
 	inst.fdPipe = nil
 	inst.cbPipe = nil
+	inst.wintun = nil
 	inst.mu.Unlock()
 	if fd != nil {
 		fd.Close()
 	}
 	if cb != nil {
 		cb.Close()
+	}
+	if wt != nil {
+		wt.Close()
 	}
 	drop(uint64(handle))
 }
