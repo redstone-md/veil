@@ -106,6 +106,50 @@ jobs:
           path: dist/veil-${{ matrix.target }}${{ matrix.ext }}
           retention-days: 7
 
+  libveil:
+    name: libveil shared library (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [core-lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            ext: so
+          - os: macos-latest
+            ext: dylib
+          - os: windows-latest
+            ext: dll
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache: true
+          cache-dependency-path: core/go.sum
+      - name: install MSYS2 mingw (Windows only)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+      - name: build libveil
+        working-directory: core
+        env:
+          CGO_ENABLED: 1
+        run: |
+          mkdir -p ../dist
+          go build -trimpath -buildmode=c-shared \
+            -o ../dist/libveil.${{ matrix.ext }} \
+            ./pkg/cgo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libveil-${{ matrix.os }}
+          path: |
+            dist/libveil.${{ matrix.ext }}
+            core/pkg/cgo/include/veil.h
+          retention-days: 7
+
   vulncheck:
     name: vulncheck
     runs-on: ubuntu-latest
@@ -121,3 +165,35 @@ jobs:
       - name: govulncheck
         working-directory: core
         run: govulncheck ./...
+
+  sdk-rust:
+    name: SDK / Rust check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdks/veil-rs
+      - name: cargo check
+        working-directory: sdks/veil-rs
+        run: cargo check --all-targets
+      - name: cargo fmt
+        working-directory: sdks/veil-rs
+        run: cargo fmt --check
+
+  sdk-python:
+    name: SDK / Python check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: syntax + import smoke
+        working-directory: sdks/veil-py
+        run: |
+          python -m compileall -q src
+          # Importing requires libveil; here we just type-check the
+          # package skeleton without loading the native library.
+          python -c "import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('src').rglob('*.py')]"
