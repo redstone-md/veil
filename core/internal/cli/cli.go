@@ -14,6 +14,7 @@ import (
 	cliadmin "github.com/redstone-md/veil/core/internal/cli/admin"
 	cliconnect "github.com/redstone-md/veil/core/internal/cli/connect"
 	cliserve "github.com/redstone-md/veil/core/internal/cli/serve"
+	cliupdate "github.com/redstone-md/veil/core/internal/cli/update"
 	cliuser "github.com/redstone-md/veil/core/internal/cli/user"
 )
 
@@ -28,6 +29,7 @@ func NewApp(version string) *cli.Command {
 			cliconnect.Command(),
 			cliuser.Command(),
 			cliadmin.Command(),
+			cliupdate.Command(),
 			versionCommand(),
 		},
 		EnableShellCompletion: true,
