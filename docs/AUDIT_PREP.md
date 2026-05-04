@@ -15,23 +15,39 @@ the auditor needs, and tracks what we have already done internally.
 ### In scope
 
 - The Veil core (`core/`):
-  - protocol implementation (Noise XK + VWP/1 + transports)
+  - protocol implementation (Noise XK + VWP/1 + transports
+    quictr / wsstr / realitytr / masquetr)
   - server and client lifecycles
   - SQLite user store + admin HTTP API
   - C-API (`pkg/cgo`) and the libveil binary it produces
+  - mobile cgo entry points (`pkg/cgo/{mobile,jni_android}.go`)
+    and the tun2socks pipe in `internal/mobile`
 - The protocol specification (`docs/PROTOCOL.md`).
 - The threat model (`docs/THREAT_MODEL.md`).
 - The deployment recipes operators are expected to use
-  (`deploy/docker/`).
-- The release pipeline (`.github/workflows/ci.yml`,
-  `release.yml` once Phase 6 lands).
+  (`deploy/docker/`, `deploy/edge/{deno,fly}/`).
+- The release pipeline (`.github/workflows/{ci,release,installer,fuzz}.yml`).
+
+### Adjacent, lower priority
+
+- Mobile clients (`clients/mobile/`) — Kotlin VpnService + JNI,
+  Swift NEPacketTunnelProvider + bridging header. The bridge code
+  is in scope to the extent it touches libveil's C ABI; the React
+  Native UI layer is out of scope for the cryptographic review.
+- Desktop client (`clients/desktop/`) — Tauri 2 host that links
+  the safe Rust SDK in-process. In scope to the extent it touches
+  libveil; the JS UI layer is out of scope.
 
 ### Out of scope
 
-- Third-party GUI installers and language SDKs (`installer/`,
-  `sdks/`) are pre-alpha and not yet recommended for trust-bearing
-  deployments. They will enter the audit scope for v2.
-- Mobile clients (none ship as of this revision).
+- Third-party GUI installer (`installer/`) and language SDKs
+  (`sdks/{veil-rs,veil-py,veil-node}`) are pre-alpha; the C ABI
+  they wrap is in scope, the wrappers themselves enter audit
+  scope for v2.
+- Edge worker source code (`deploy/edge/`) is reviewed at the
+  protocol-bridging layer (it terminates WSS and forwards to the
+  origin); the operator is expected to apply their own provider's
+  hardening guidance to the deployment itself.
 - The user's hardware and operating system (see threat model
   section "Trust boundaries and assumptions").
 
@@ -154,9 +170,15 @@ not yet enabled.
 - `govulncheck` runs in CI on every PR (job: `vulncheck`).
 - Dependabot is not yet configured; renovate equivalent is on the
   Phase 6 checklist.
-- Releases will be signed with Sigstore (cosign keyless) at v1.0.
-  This is a precondition for the auto-update path documented in
-  PRD §15.4.
+- Releases are signed with Sigstore (cosign keyless) via the
+  workflow's GitHub OIDC identity (`.github/workflows/release.yml`).
+  Per-binary SBOMs are produced by syft and uploaded alongside.
+  The `veil update apply --cosign` flag verifies signatures on
+  auto-updates against the configured `--cosign-subject` /
+  `--cosign-issuer`.
+- Multi-arch container images at
+  `ghcr.io/redstone-md/veil:vX.Y.Z` are signed at the manifest
+  level by the same workflow.
 
 Top dependencies an auditor should inspect:
 

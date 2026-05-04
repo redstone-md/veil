@@ -34,9 +34,13 @@ releases are appended below it as `## [vMAJOR.MINOR.PATCH] – YYYY-MM-DD`.
   configured target SNI so probes see the real third-party site;
   authenticated clients short-circuit into a Noise XK session
   inside a forged-cert TLS termination.
-- **HTTP/3 MASQUE transport** — skeleton + design (ADR-0003); the
-  functional implementation is gated on `quic-go/masque-go`
-  reaching a stable release (Phase 5.7).
+- **HTTP/3 MASQUE transport** (`internal/transport/masquetr`) —
+  functional implementation backed by `quic-go/masque-go` v0.3.
+  Server is an HTTP/3 endpoint whose CONNECT-UDP handler forwards
+  every datagram to a configured loopback inner-QUIC listener;
+  client composes outer-QUIC + HTTP/3 + CONNECT-UDP + inner-QUIC
+  in one Dial. End-to-end roundtrip test in
+  `roundtrip_test.go`.
 - **Multi-listen per transport** — one `transports[*]` entry can
   bind several IPs/ports via `listens: []string`.
 
@@ -113,10 +117,49 @@ releases are appended below it as `## [vMAJOR.MINOR.PATCH] – YYYY-MM-DD`.
 
 ### Added — installer and clients
 
-- **Tauri v2 installer scaffold** (`installer/`) — Vite + vanilla
-  JS frontend on a Rust host; the Docker compose generator
-  workflow is fully implemented; SSH and Edge OAuth workflows
-  are placeholders for Phase 3.6.
+- **Tauri v2 installer** (`installer/`) — Vite + vanilla JS
+  frontend on a Rust host. Three operator paths:
+  - Docker compose generator: native file-save dialog emits a
+    ready-to-`docker compose up` YAML.
+  - SSH workflow: connect, auto-detect remote arch, fetch the
+    matching `veil` binary from the latest GitHub Release, write
+    `/etc/veil/server.yaml` and a systemd unit, enable + start
+    + tail logs back. Backed by `russh` (ring crypto, no NASM
+    on Windows).
+  - Edge bundle generator: pick Deno Deploy or Fly.io; emit a
+    folder of worker source + provider config + DEPLOY recipe,
+    OR push the bundle straight to the provider's API via a
+    paste-in personal-access token (`installer/src-tauri/src/edge_deploy.rs`).
+- **Desktop client** (`clients/desktop/`) — Tauri 2 app linking
+  the safe `veil-rs` SDK in-process. System tray, OS notifications,
+  launch-at-login (`tauri-plugin-autostart`), profile manager
+  (`tauri-plugin-store`), settings panel (autostart, mimicry,
+  decoy, notifications), in-app update via the bundled
+  `veil update --json` CLI. Close-to-tray rather than exit.
+- **Mobile clients** (`clients/mobile/`, scaffold) — React Native
+  (Expo bare) UI sharing the desktop UX, on top of platform-
+  specific tunnel implementations:
+  - Android: Kotlin `VeilVpnService` + JNI bridge in
+    `core/pkg/cgo/jni_android.go`. The TUN fd
+    `VpnService.Builder.establish()` returns is handed to
+    `xjasonlyu/tun2socks/v2/engine`, which dials each TCP/UDP
+    flow through the per-session SOCKS5 listener for full
+    system-traffic interception.
+  - iOS: Swift `NEPacketTunnelProvider` + host-app
+    `VeilBridge` (`NETunnelProviderManager` wrapper) +
+    `core/pkg/cgo/mobile.go` ingest/emit callbacks. The iOS
+    pipe builds its own gVisor netstack via tun2socks's
+    `core.CreateStack` with a `channel.Endpoint` LinkEndpoint;
+    Ingest/emit hop between the netstack and packetFlow.
+
+### Added — language SDKs
+
+- **Node NAPI bindings** (`sdks/veil-node/`) — `@veil/node`
+  package built with `napi-rs`. Wraps the safe Rust SDK; the
+  libveil event callback is bridged through napi-rs's
+  ThreadsafeFunction so the Go reporter goroutine can hand
+  events to the Node event loop without touching the JS engine
+  directly.
 
 ### Added — security and verification
 
@@ -130,6 +173,25 @@ releases are appended below it as `## [vMAJOR.MINOR.PATCH] – YYYY-MM-DD`.
 - **Go-native fuzz tests** for the binary parsers (frame codec,
   Reality ClientHello, share-link) plus a nightly CI fuzz job.
 - **govulncheck** runs in CI on every PR.
+
+### Added — release machinery
+
+- **Tag-triggered release pipeline** (`.github/workflows/release.yml`)
+  builds the cross-platform asset matrix (`linux/amd64,arm64`,
+  `darwin/amd64,arm64`, `windows/amd64`), signs every artefact
+  with cosign keyless via the workflow's GitHub OIDC identity,
+  generates per-binary SBOMs via syft, and uploads everything to
+  the matching GitHub Release.
+- **Multi-arch container image** at
+  `ghcr.io/redstone-md/veil:vX.Y.Z` and `:latest` published on
+  every tag, with cosign signature on the manifest.
+- **Distribution channels** — Homebrew formula skeleton at
+  `deploy/homebrew/veil.rb` and Scoop manifest at
+  `deploy/scoop/veil.json` (with checkver / autoupdate blocks);
+  per-release update process documented in `docs/RELEASING.md`.
+- **Tag-only triggers** for the heavy `installer.yml` matrix;
+  main-branch pushes only run the cheap `ci.yml` lane to keep
+  the project's CI minute budget bounded.
 
 ### Added — documentation
 
