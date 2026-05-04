@@ -47,7 +47,10 @@ class VeilVpnService : VpnService() {
     companion object {
         private const val TAG = "VeilVpnService"
         private const val NOTIF_CHANNEL = "veil-tunnel"
-        private const val NOTIF_ID = 0xVE11
+        // Arbitrary positive int unique inside our own package's
+        // notification ID space; collisions with other apps don't
+        // matter (each app has its own notification table).
+        private const val NOTIF_ID = 0x5E11
 
         const val ACTION_START = "org.veil.mobile.START"
         const val ACTION_STOP  = "org.veil.mobile.STOP"

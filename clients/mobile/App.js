@@ -130,7 +130,12 @@ export default function App() {
   }
 
   async function addProfile() {
-    Alert.prompt?.("New profile", "Profile name", async (name) => {
+    // Alert.prompt is iOS-only. On Android the user renames the
+    // freshly-added profile from the chip after creation in a
+    // follow-up commit; for now the auto-generated label avoids a
+    // dead button.
+    const fallbackName = `Profile ${profiles.length + 1}`;
+    const commit = async (name) => {
       if (!name) return;
       const id = String(Date.now());
       const next = [...profiles, { id, name, config: editor }];
@@ -138,7 +143,12 @@ export default function App() {
       setActiveId(id);
       await store.saveProfiles(next);
       await store.saveActiveId(id);
-    });
+    };
+    if (Platform.OS === "ios" && Alert.prompt) {
+      Alert.prompt("New profile", "Profile name", commit);
+    } else {
+      await commit(fallbackName);
+    }
   }
 
   async function deleteProfile() {
