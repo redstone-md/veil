@@ -4,17 +4,19 @@
 // Licensed under the Apache License, Version 2.0 (the "License");
 
 // Package serve wires the `veil serve` subcommand: load server
-// configuration, listen for QUIC connections, run a Noise XK
-// responder handshake on each, then run a multiplexed VWP/1
-// session that forwards every accepted stream to its requested
-// upstream target.
+// configuration, bring up every configured transport listener,
+// run the Noise XK responder handshake on each accepted connection,
+// then drive a multiplexed VWP/1 session that forwards every
+// accepted stream to its requested upstream target.
 package serve
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strings"
 
@@ -26,6 +28,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/session"
 	"github.com/redstone-md/veil/core/internal/transport"
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
+	"github.com/redstone-md/veil/core/internal/transport/wsstr"
 )
 
 // Command returns the `veil serve` cli.Command.
@@ -68,29 +71,74 @@ func run(ctx context.Context, cfgPath string) error {
 	}
 	slog.Info("authorized client keys loaded", "count", len(authorized))
 
-	ln, err := quictr.Listen(cfg.Listen)
-	if err != nil {
-		return err
+	fanIn := transport.NewFanIn(slog.Default())
+	for i, t := range cfg.Transports {
+		ln, err := buildListener(t)
+		if err != nil {
+			return fmt.Errorf("transport[%d] %s: %w", i, t.Type, err)
+		}
+		label := fmt.Sprintf("%s@%s", t.Type, t.Listen)
+		fanIn.Add(label, ln)
+		slog.Info("listening", "transport", t.Type, "addr", t.Listen)
 	}
-	defer ln.Close()
-	slog.Info("listening", "transport", "quic", "addr", cfg.Listen)
+	defer fanIn.Close()
 
 	go func() {
 		<-ctx.Done()
-		_ = ln.Close()
+		_ = fanIn.Close()
 	}()
 
 	for {
-		conn, err := ln.Accept(ctx)
+		conn, err := fanIn.Accept(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			slog.Error("accept failed", "err", err)
-			continue
+			return err
 		}
 		go handleConn(ctx, conn, *staticKP, authorized)
 	}
+}
+
+func buildListener(t config.ServerTransport) (transport.Listener, error) {
+	switch t.Type {
+	case config.TransportQUIC:
+		return quictr.Listen(t.Listen)
+	case config.TransportWSS:
+		tlsCfg, err := buildServerTLS(t)
+		if err != nil {
+			return nil, err
+		}
+		return wsstr.Listen(wsstr.ListenConfig{
+			Addr: t.Listen,
+			Path: t.Path,
+			TLS:  tlsCfg,
+		})
+	case config.TransportReality:
+		return nil, fmt.Errorf("reality transport not yet implemented; see docs/architecture/ADR-0002")
+	default:
+		return nil, fmt.Errorf("unknown transport type %q", t.Type)
+	}
+}
+
+func buildServerTLS(t config.ServerTransport) (*tls.Config, error) {
+	if t.CertFile != "" && t.KeyFile != "" {
+		return wsstr.LoadTLSConfig(t.CertFile, t.KeyFile)
+	}
+	host, _, err := net.SplitHostPort(t.Listen)
+	if err != nil {
+		host = "localhost"
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	slog.Warn("self-signed TLS cert in use",
+		"transport", t.Type,
+		"hint", "set cert_file and key_file for production",
+		"cn", host,
+	)
+	return wsstr.SelfSignedTLSConfig(host)
 }
 
 func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypair, authorized map[string]struct{}) {
