@@ -30,6 +30,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/forward"
 	"github.com/redstone-md/veil/core/internal/session"
 	"github.com/redstone-md/veil/core/internal/transport"
+	"github.com/redstone-md/veil/core/internal/transport/masquetr"
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
 	"github.com/redstone-md/veil/core/internal/transport/realitytr"
 	"github.com/redstone-md/veil/core/internal/transport/wsstr"
@@ -198,6 +199,8 @@ func buildListener(t config.ServerTransport, serverStaticPub []byte, acmeMgr *ac
 			TargetAddr: t.TargetAddr,
 			Logger:     slog.Default(),
 		})
+	case config.TransportMASQUE:
+		return nil, masquetr.ErrNotImplemented
 	default:
 		return nil, fmt.Errorf("unknown transport type %q", t.Type)
 	}

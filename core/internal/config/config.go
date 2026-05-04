@@ -20,7 +20,8 @@ type TransportType string
 const (
 	TransportQUIC    TransportType = "quic"
 	TransportWSS     TransportType = "wss"
-	TransportReality TransportType = "reality" // not yet implemented
+	TransportReality TransportType = "reality"
+	TransportMASQUE  TransportType = "masque" // not yet implemented; see ADR-0003
 )
 
 // ServerTransport configures one wire-level listener on the server.
