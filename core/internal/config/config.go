@@ -184,6 +184,15 @@ type ClientConfig struct {
 	// keypair. Created on first run if absent.
 	StaticKeyPath string `yaml:"static_key_path"`
 
+	// StaticKeyInlineB64, when set, supersedes StaticKeyPath and
+	// carries the client's Noise XK private key inline as a base64
+	// string. The matching public key is derived on the fly via
+	// X25519. The intended use is one-shot share links emitted by
+	// `veil user show-config --client-key-b64 ...` so end users get
+	// a single string that fully provisions a client without an
+	// extra key-file step.
+	StaticKeyInlineB64 string `yaml:"static_key_inline_b64"`
+
 	// SOCKS5Listen is the host:port the local SOCKS5 proxy binds to.
 	// Defaults to "127.0.0.1:1080" when empty.
 	SOCKS5Listen string `yaml:"socks5_listen"`
@@ -266,8 +275,8 @@ func (c *ClientConfig) Validate() error {
 	if c.ServerStaticKeyB64 == "" {
 		return errors.New("client.server_static_key_b64 is required")
 	}
-	if c.StaticKeyPath == "" {
-		return errors.New("client.static_key_path is required")
+	if c.StaticKeyPath == "" && c.StaticKeyInlineB64 == "" {
+		return errors.New("client.static_key_path or client.static_key_inline_b64 is required")
 	}
 	return nil
 }

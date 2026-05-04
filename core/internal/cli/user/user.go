@@ -9,6 +9,7 @@ package user
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/redstone-md/veil/core/internal/config"
+	"github.com/redstone-md/veil/core/internal/crypto"
 	"github.com/redstone-md/veil/core/internal/sharelink"
 	"github.com/redstone-md/veil/core/internal/users"
 )
@@ -71,7 +73,7 @@ func addCmd() *cli.Command {
 		Flags: []cli.Flag{
 			dbFlag(),
 			&cli.StringFlag{Name: "name", Required: true, Usage: "Display name (unique)"},
-			&cli.StringFlag{Name: "pubkey", Required: true, Usage: "Client Noise XK static public key (base64)"},
+			&cli.StringFlag{Name: "pubkey", Usage: "Client Noise XK static public key (base64). When omitted, a fresh keypair is generated and the private key is printed once."},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			s, err := openStore(cmd)
@@ -79,11 +81,40 @@ func addCmd() *cli.Command {
 				return err
 			}
 			defer s.Close()
-			u, err := s.CreateUser(ctx, cmd.String("name"), cmd.String("pubkey"))
+
+			pubB64 := cmd.String("pubkey")
+			var generatedPriv []byte
+			if pubB64 == "" {
+				kp, gerr := crypto.GenerateKeypair()
+				if gerr != nil {
+					return gerr
+				}
+				pubB64 = base64.StdEncoding.EncodeToString(kp.Public)
+				generatedPriv = kp.Private
+			}
+
+			u, err := s.CreateUser(ctx, cmd.String("name"), pubB64)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("created user %s (id=%s)\n", u.Name, u.ID)
+			fmt.Printf("Created user %s (id=%s).\n", u.Name, u.ID)
+			fmt.Printf("Pubkey:  %s\n", pubB64)
+			if generatedPriv != nil {
+				privB64 := base64.StdEncoding.EncodeToString(generatedPriv)
+				fmt.Println()
+				fmt.Println("# IMPORTANT: this is the only time the private key is shown.")
+				fmt.Println("# The server does NOT keep a copy. Hand it to the user, or fold it")
+				fmt.Println("# into a complete share link with `veil user show-config`:")
+				fmt.Println()
+				fmt.Printf("Privkey: %s\n", privB64)
+				fmt.Println()
+				fmt.Printf("# Generate a one-step share link:\n")
+				fmt.Printf("#   veil user show-config %s \\\n", u.ID)
+				fmt.Printf("#     --server-pubkey <SERVER_PUB_B64> \\\n")
+				fmt.Printf("#     --server-addr   <HOST:PORT> \\\n")
+				fmt.Printf("#     --transport     reality \\\n")
+				fmt.Printf("#     --client-key-b64 %s\n", privB64)
+			}
 			return nil
 		},
 	}
@@ -313,7 +344,8 @@ func showConfigCmd() *cli.Command {
 			&cli.StringFlag{Name: "sni", Usage: "TLS SNI (wss/reality only)"},
 			&cli.StringFlag{Name: "path", Usage: "WSS upgrade path"},
 			&cli.StringFlag{Name: "fingerprint", Usage: "uTLS fingerprint (chrome/firefox/...)"},
-			&cli.StringFlag{Name: "static-key-path", Value: "veil-client.key", Usage: "Where the client should keep its keypair"},
+			&cli.StringFlag{Name: "static-key-path", Value: "veil-client.key", Usage: "Where the client should keep its keypair (ignored when --client-key-b64 is set)"},
+			&cli.StringFlag{Name: "client-key-b64", Usage: "Embed the client's Noise XK private key inline in the share link. Use the value printed by `veil user add` for a one-shot handoff that does not need an external key file."},
 			&cli.StringFlag{Name: "socks5-listen", Value: "127.0.0.1:1080", Usage: "Local SOCKS5 bind address"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -332,7 +364,6 @@ func showConfigCmd() *cli.Command {
 			}
 			cfg := config.ClientConfig{
 				ServerStaticKeyB64: cmd.String("server-pubkey"),
-				StaticKeyPath:      cmd.String("static-key-path"),
 				SOCKS5Listen:       cmd.String("socks5-listen"),
 				Servers: []config.ClientServer{{
 					Type:        config.TransportType(cmd.String("transport")),
@@ -341,6 +372,12 @@ func showConfigCmd() *cli.Command {
 					Path:        cmd.String("path"),
 					Fingerprint: cmd.String("fingerprint"),
 				}},
+			}
+			inline := cmd.String("client-key-b64")
+			if inline != "" {
+				cfg.StaticKeyInlineB64 = inline
+			} else {
+				cfg.StaticKeyPath = cmd.String("static-key-path")
 			}
 			out, err := yaml.Marshal(&cfg)
 			if err != nil {
@@ -351,11 +388,18 @@ func showConfigCmd() *cli.Command {
 				return err
 			}
 			fmt.Printf("# user: %s (id=%s, status=%s)\n", u.Name, u.ID, u.Status)
-			fmt.Printf("# IMPORTANT: the client must use the matching static_key_path so it generates a key whose pubkey is:\n")
-			fmt.Printf("#   %s\n", u.PubkeyB64)
-			fmt.Printf("# If the existing client key does not match, run `veil user regen --pubkey <new>` after the client first connects.\n\n")
+			fmt.Printf("# pubkey on file: %s\n", u.PubkeyB64)
+			if inline == "" {
+				fmt.Printf("# NOTE: this config uses an external key file (--static-key-path).\n")
+				fmt.Printf("#       The client's keypair must produce the pubkey above; if not,\n")
+				fmt.Printf("#       run `veil user regen --pubkey <new>` after the client connects.\n")
+				fmt.Printf("#       For a one-shot handoff use `--client-key-b64 <priv>` instead\n")
+				fmt.Printf("#       (the value printed by `veil user add`).\n\n")
+			} else {
+				fmt.Printf("# inline key: client provisioned in one shot — no key file needed.\n\n")
+			}
 			os.Stdout.Write(out)
-			fmt.Printf("\n# share-link (paste into a client with `veil connect --link`):\n%s\n", link)
+			fmt.Printf("\n# share-link (paste into a client with `veil connect --link` or the desktop's Paste box):\n%s\n", link)
 			return nil
 		},
 	}

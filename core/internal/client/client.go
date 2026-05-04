@@ -9,6 +9,7 @@ package client
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -112,9 +113,23 @@ func (c *Client) Run(ctx context.Context) error {
 		socksAddr = "127.0.0.1:1080"
 	}
 
-	staticKP, err := crypto.LoadOrCreateKeypair(c.cfg.StaticKeyPath)
-	if err != nil {
-		return c.fail("load static key", err)
+	var staticKP *crypto.Keypair
+	if c.cfg.StaticKeyInlineB64 != "" {
+		priv, derr := base64.StdEncoding.DecodeString(c.cfg.StaticKeyInlineB64)
+		if derr != nil {
+			return c.fail("decode inline static key", derr)
+		}
+		kp, derr := crypto.KeypairFromPrivate(priv)
+		if derr != nil {
+			return c.fail("inline static key", derr)
+		}
+		staticKP = kp
+	} else {
+		kp, lerr := crypto.LoadOrCreateKeypair(c.cfg.StaticKeyPath)
+		if lerr != nil {
+			return c.fail("load static key", lerr)
+		}
+		staticKP = kp
 	}
 	c.logger.Info("client static key ready",
 		"public_key_b64", crypto.EncodePublicKey(staticKP.Public),

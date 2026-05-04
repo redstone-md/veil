@@ -7,6 +7,7 @@
 package crypto
 
 import (
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -45,6 +46,25 @@ func GenerateKeypair() (*Keypair, error) {
 		return nil, fmt.Errorf("generate keypair: %w", err)
 	}
 	return &Keypair{Private: kp.Private, Public: kp.Public}, nil
+}
+
+// KeypairFromPrivate reconstructs a full Noise XK keypair from a
+// raw 32-byte X25519 private key. Used by the inline-key client
+// path (StaticKeyInlineB64) where the public half has to be derived
+// on the fly rather than read from a sibling file.
+func KeypairFromPrivate(priv []byte) (*Keypair, error) {
+	if len(priv) != 32 {
+		return nil, fmt.Errorf("private key must be 32 bytes, got %d", len(priv))
+	}
+	curve := ecdh.X25519()
+	pk, err := curve.NewPrivateKey(priv)
+	if err != nil {
+		return nil, fmt.Errorf("derive public key: %w", err)
+	}
+	return &Keypair{
+		Private: append([]byte(nil), priv...),
+		Public:  pk.PublicKey().Bytes(),
+	}, nil
 }
 
 // LoadOrCreateKeypair reads a keypair from path. If the file does
