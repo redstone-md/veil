@@ -9,59 +9,118 @@
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
     background: #0d1117; color: #c9d1d9;
-    margin: 0; padding: 1.5rem; max-width: 1100px;
+    margin: 0; padding: 1.5rem; max-width: 1200px;
   }
-  h1 { font-weight: 600; margin: 0 0 1rem; }
+  h1 { font-weight: 600; margin: 0 0 0.25rem; }
+  .subtitle { color: #8b949e; margin-bottom: 1rem; font-size: 0.85rem; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
   .stat { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0.75rem 1rem; }
   .stat .label { font-size: 0.8rem; color: #8b949e; }
   .stat .value { font-size: 1.5rem; font-weight: 600; margin-top: 0.25rem; }
   table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #30363d; }
-  th { color: #8b949e; font-weight: 500; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #30363d; vertical-align: top; }
+  th { color: #8b949e; font-weight: 500; cursor: pointer; user-select: none; }
+  th:hover { color: #c9d1d9; }
+  th.sort-asc::after  { content: " ↑"; color: #58a6ff; }
+  th.sort-desc::after { content: " ↓"; color: #58a6ff; }
   tr:hover { background: #161b22; }
-  .status-active { color: #3fb950; }
-  .status-revoked { color: #f85149; }
-  .status-expired, .status-quota_exceeded { color: #d29922; }
+  .status-active        { color: #3fb950; }
+  .status-revoked       { color: #f85149; }
+  .status-expired       { color: #d29922; }
+  .status-quota_exceeded{ color: #d29922; }
   button {
     background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
     padding: 0.4rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
   }
   button:hover { background: #30363d; }
-  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
-  input { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 0.4rem 0.6rem; border-radius: 6px; }
-  input:focus { outline: none; border-color: #58a6ff; }
-  code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.85rem; color: #79c0ff; }
+  button.primary { background: #238636; border-color: #2ea043; color: #fff; }
+  button.primary:hover { background: #2ea043; }
+  button.danger { color: #f85149; }
+  button.danger:hover { background: #5a1d1d; color: #fff; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+  input, select {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 0.4rem 0.6rem; border-radius: 6px; font-family: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: #58a6ff; }
+  code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.8rem; color: #79c0ff; }
+  .muted { color: #6e7681; }
+  .progress { width: 80px; height: 6px; background: #30363d; border-radius: 3px; overflow: hidden; }
+  .progress > div { height: 100%; background: #58a6ff; }
+  .progress.over > div { background: #f85149; }
   .toolbar { margin-bottom: 0.75rem; }
   .empty { color: #8b949e; padding: 2rem; text-align: center; }
+
+  /* Modal for editing quota / expiry */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+    display: none; align-items: center; justify-content: center; z-index: 99;
+  }
+  .overlay.show { display: flex; }
+  .modal {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 1.25rem 1.5rem; min-width: 360px; max-width: 480px;
+  }
+  .modal h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
+  .modal label { display: block; font-size: 0.8rem; color: #8b949e; margin-top: 0.6rem; }
+  .modal input { width: 100%; margin-top: 0.25rem; box-sizing: border-box; }
+  .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
 </style>
 </head>
 <body>
 
 <h1>Veil Admin</h1>
+<div class="subtitle">
+  pre-alpha · <span id="version" class="muted">…</span>
+</div>
 
 <div class="stats" id="stats"></div>
 
 <div class="row toolbar">
   <input id="newName" placeholder="user name" />
   <input id="newPubkey" placeholder="client pubkey (base64)" style="flex:1" />
-  <button onclick="createUser()">Add user</button>
+  <button class="primary" onclick="createUser()">Add user</button>
   <button onclick="loadAll()">Refresh</button>
+  <input id="filter" placeholder="filter…" style="margin-left:auto" oninput="renderUsers()" />
 </div>
 
-<table>
+<table id="userTable">
   <thead>
     <tr>
-      <th>Name</th><th>Status</th><th>Created</th>
-      <th>Used</th><th>Quota</th><th>Expires</th><th>Last seen</th><th></th>
+      <th data-key="name">Name</th>
+      <th data-key="status">Status</th>
+      <th data-key="created_at">Created</th>
+      <th data-key="used_bytes_current_month">Used</th>
+      <th>Quota</th>
+      <th data-key="expires_at">Expires</th>
+      <th data-key="last_seen">Last seen</th>
+      <th>Actions</th>
     </tr>
   </thead>
   <tbody id="users"></tbody>
 </table>
 <div class="empty" id="empty" style="display:none">No users yet. Add one above to get started.</div>
 
+<!-- Edit modal -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h2 id="modalTitle">Edit user</h2>
+    <div id="modalBody"></div>
+    <div class="modal-actions">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" id="modalSave" onclick="saveModal()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
+let allUsers = [];
+let sortKey = 'created_at';
+let sortDir = 'desc';
+let modalCtx = null;
+
 function bytes(n){
+  if(n===null||n===undefined) return '∞';
   if(n<1024) return n+' B';
   const u=['KB','MB','GB','TB']; let i=-1, v=n;
   do{ v/=1024; i++; }while(v>=1024 && i<u.length-1);
@@ -71,9 +130,20 @@ function ts(t){ return t? new Date(t*1000).toISOString().slice(0,10): '—'; }
 
 async function api(path, opts){
   const r = await fetch(path, opts);
-  if(!r.ok) throw new Error(r.status+' '+(await r.text()));
+  if(!r.ok){
+    const text = await r.text();
+    throw new Error(r.status + ' ' + (text || r.statusText));
+  }
   if(r.status===204) return null;
   return r.json();
+}
+
+async function loadVersion(){
+  try{
+    const v = await api('/api/version');
+    document.getElementById('version').textContent =
+      `${v.version} · ${v.commit?.slice(0,7) || 'unknown'}`;
+  }catch(e){ /* ignore */ }
 }
 
 async function loadStats(){
@@ -87,33 +157,85 @@ async function loadStats(){
 }
 
 async function loadUsers(){
-  const list = await api('/api/users');
+  allUsers = await api('/api/users');
+  renderUsers();
+}
+
+function compareKey(a, b, k){
+  const av = a[k], bv = b[k];
+  if(av===bv) return 0;
+  if(av==null) return 1;
+  if(bv==null) return -1;
+  return av < bv ? -1 : 1;
+}
+
+function applySort(){
+  document.querySelectorAll('th').forEach(th => {
+    th.classList.remove('sort-asc','sort-desc');
+    if(th.dataset.key === sortKey) th.classList.add(sortDir==='asc'?'sort-asc':'sort-desc');
+  });
+}
+
+function renderUsers(){
+  applySort();
+  const filter = document.getElementById('filter').value.trim().toLowerCase();
+  let rows = allUsers.slice();
+  if(filter){
+    rows = rows.filter(u =>
+      u.name.toLowerCase().includes(filter) ||
+      u.id.toLowerCase().includes(filter) ||
+      u.status.toLowerCase().includes(filter));
+  }
+  rows.sort((a,b) => compareKey(a,b,sortKey) * (sortDir==='asc'?1:-1));
+
   const tbody = document.getElementById('users');
   tbody.innerHTML = '';
-  document.getElementById('empty').style.display = list.length===0 ? 'block' : 'none';
-  for(const u of list){
+  document.getElementById('empty').style.display = rows.length===0 ? 'block' : 'none';
+  for(const u of rows){
     const tr = document.createElement('tr');
+    const usePct = u.quota_bytes_per_month
+      ? Math.min(100, Math.round(100 * u.used_bytes_current_month / u.quota_bytes_per_month))
+      : null;
+    const progress = usePct !== null
+      ? `<div class="progress${usePct>=100?' over':''}"><div style="width:${usePct}%"></div></div>`
+      : '';
     tr.innerHTML = `
       <td><strong>${u.name}</strong><br/><code>${u.id}</code></td>
       <td class="status-${u.status}">${u.status}</td>
       <td>${ts(u.created_at)}</td>
-      <td>${bytes(u.used_bytes_current_month)}</td>
-      <td>${u.quota_bytes_per_month? bytes(u.quota_bytes_per_month):'∞'}</td>
+      <td>${bytes(u.used_bytes_current_month)} ${progress}</td>
+      <td>${bytes(u.quota_bytes_per_month)}</td>
       <td>${ts(u.expires_at)}</td>
       <td>${ts(u.last_seen)}</td>
       <td>
         ${u.status==='active'
           ? `<button onclick="setStatus('${u.id}','revoked')">revoke</button>`
           : `<button onclick="setStatus('${u.id}','active')">restore</button>`}
-        <button onclick="deleteUser('${u.id}')">delete</button>
+        <button onclick="editQuota('${u.id}')">quota</button>
+        <button onclick="editExpiry('${u.id}')">expiry</button>
+        <button class="danger" onclick="deleteUser('${u.id}')">delete</button>
       </td>`;
     tbody.appendChild(tr);
   }
 }
 
+document.querySelectorAll('th').forEach(th => {
+  if(!th.dataset.key) return;
+  th.onclick = () => {
+    if(sortKey === th.dataset.key){
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortKey = th.dataset.key;
+      sortDir = 'asc';
+    }
+    renderUsers();
+  };
+});
+
 async function loadAll(){
-  try{ await loadStats(); await loadUsers(); }
-  catch(e){ alert(e.message); }
+  try{
+    await Promise.all([loadStats(), loadUsers()]);
+  }catch(e){ alert(e.message); }
 }
 
 async function createUser(){
@@ -121,7 +243,9 @@ async function createUser(){
   const pub  = document.getElementById('newPubkey').value.trim();
   if(!name || !pub){ alert('name and pubkey required'); return; }
   try{
-    await api('/api/users', {method:'POST', headers:{'Content-Type':'application/json'},
+    await api('/api/users', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name, pubkey_b64: pub})});
     document.getElementById('newName').value='';
     document.getElementById('newPubkey').value='';
@@ -131,7 +255,8 @@ async function createUser(){
 
 async function setStatus(id, status){
   try{
-    await api('/api/users/'+id, {method:'PATCH', headers:{'Content-Type':'application/json'},
+    await api('/api/users/'+id, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({status})});
     loadAll();
   }catch(e){ alert(e.message); }
@@ -145,6 +270,65 @@ async function deleteUser(id){
   }catch(e){ alert(e.message); }
 }
 
+function openModal(title, body, save){
+  document.getElementById('modalTitle').textContent = title;
+  document.getElementById('modalBody').innerHTML = body;
+  modalCtx = save;
+  document.getElementById('overlay').classList.add('show');
+}
+function closeModal(){
+  document.getElementById('overlay').classList.remove('show');
+  modalCtx = null;
+}
+async function saveModal(){
+  if(!modalCtx) return;
+  try{
+    await modalCtx();
+    closeModal();
+    loadAll();
+  }catch(e){ alert(e.message); }
+}
+
+function editQuota(id){
+  const u = allUsers.find(x => x.id===id);
+  const cur = u.quota_bytes_per_month ?? '';
+  openModal('Edit quota — '+u.name, `
+    <label>Quota in bytes (empty = unlimited)</label>
+    <input id="qInput" type="number" min="0" placeholder="e.g. 5368709120" value="${cur}" />
+    <p class="muted" style="font-size:0.8rem; margin-top:0.5rem;">
+      Examples: 1073741824 = 1 GB, 5368709120 = 5 GB, 53687091200 = 50 GB.
+    </p>`,
+    async () => {
+      const raw = document.getElementById('qInput').value.trim();
+      const body = raw === ''
+        ? { clear_quota: true }
+        : { quota_bytes_per_month: parseInt(raw, 10) };
+      await api('/api/users/'+id, {
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)});
+    });
+}
+
+function editExpiry(id){
+  const u = allUsers.find(x => x.id===id);
+  const cur = u.expires_at ? new Date(u.expires_at*1000).toISOString().slice(0,10) : '';
+  openModal('Edit expiry — '+u.name, `
+    <label>Expires on (YYYY-MM-DD; empty = never)</label>
+    <input id="eInput" type="date" value="${cur}" />`,
+    async () => {
+      const raw = document.getElementById('eInput').value.trim();
+      const body = raw === ''
+        ? { clear_expiry: true }
+        : { expires_at: Math.floor(new Date(raw + 'T23:59:59Z').getTime() / 1000) };
+      await api('/api/users/'+id, {
+        method:'PATCH', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body)});
+    });
+}
+
+document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+
+loadVersion();
 loadAll();
 setInterval(loadAll, 30000);
 </script>
