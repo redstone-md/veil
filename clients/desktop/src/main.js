@@ -42,7 +42,8 @@ const state = {
     mimicry: "",
     decoy: false,
     notifications: true,
-    mode: "socks5", // socks5 (default) | tun (system-wide, coming soon)
+    mode: "socks5", // socks5 (per-app) | tun (system-wide via Wintun)
+    bypassCidrs: "",  // newline-separated CIDRs that always go direct (gaming, LAN)
   },
   log: [],
   update: null,
@@ -278,6 +279,26 @@ function renderSettings(host) {
       modeCard("socks5", "SOCKS5 proxy", "Per-app: configure your browser / app to use 127.0.0.1:1080. Works without admin rights.", state.settings.mode === "socks5"),
       modeCard("tun",    "System-wide TUN", "All traffic transparently via a Wintun adapter. Needs Administrator + wintun.dll next to the app.", state.settings.mode === "tun"),
     ),
+    state.settings.mode === "tun"
+      ? el("div", {},
+          el("label", { class: "fieldlabel", style: "margin-top: 12px; display: block" }, "Always direct (CIDR per line — LAN, game servers, etc.)"),
+          (() => {
+            const ta = el("textarea", {
+              spellcheck: "false",
+              placeholder: "192.168.0.0/16\n10.0.0.0/8\n# Apex Legends edge:\n52.40.0.0/14",
+              oninput: async (ev) => {
+                state.settings.bypassCidrs = ev.target.value;
+                await persistSettings();
+              },
+            });
+            ta.value = state.settings.bypassCidrs || "";
+            return ta;
+          })(),
+          el("p", { class: "subtitle", style: "margin-top: 6px" },
+            "These networks bypass the tunnel — useful for low-latency game traffic and LAN access. Veil's server IPs are always added automatically.",
+          ),
+        )
+      : null,
   );
 
   const general = el("div", { class: "card" },
@@ -515,9 +536,14 @@ async function connect() {
   pushLog(`connect requested (mode=${state.settings.mode})`);
   try {
     if (state.settings.mode === "tun") {
-      await invoke("tun_start", { configText: cfg });
-      // tun_start completes once Wintun is up + routes are installed.
-      // libveil's EventConnected will arrive on the event channel.
+      const serverIPs = extractServerHosts(cfg);
+      const bypassCidrs = (state.settings.bypassCidrs || "")
+        .split(/\r?\n/)
+        .map((l) => l.replace(/#.*$/, "").trim())
+        .filter(Boolean);
+      await invoke("tun_start", {
+        args: { config_text: cfg, bypass_cidrs: bypassCidrs, server_ips: serverIPs },
+      });
     } else {
       await invoke("veil_start", { configText: cfg });
     }
@@ -528,6 +554,29 @@ async function connect() {
     pushLog("connect failed: " + e);
     render();
   }
+}
+
+// Extract server addresses from a config (veil:// share link OR YAML).
+// Used to auto-bypass server IPs in TUN mode so libveil's outbound
+// dial doesn't loop through its own TUN.
+function extractServerHosts(cfg) {
+  const out = new Set();
+  if (cfg.startsWith("veil://")) {
+    try {
+      const b64 = cfg.slice("veil://".length).replace(/-/g, "+").replace(/_/g, "/");
+      const padded = b64 + "==".slice((b64.length % 4) ? -(4 - (b64.length % 4)) : 0);
+      const decoded = JSON.parse(atob(padded));
+      for (const s of decoded.Servers || []) {
+        if (s.Addr) out.add(s.Addr.split(":")[0]);
+      }
+    } catch (_) {}
+  } else {
+    // YAML — naive: regex-extract `addr:` lines
+    for (const m of cfg.matchAll(/addr:\s*([^\s\n]+)/g)) {
+      out.add(m[1].split(":")[0].replace(/['"]/g, ""));
+    }
+  }
+  return [...out];
 }
 
 async function disconnect() {

@@ -314,9 +314,12 @@ fn show_main_window(app: &AppHandle) {
 
 #[cfg(windows)]
 #[tauri::command]
-async fn tun_start(state: State<'_, VeilState>, config_text: String) -> Result<tun::TunStatus, String> {
-    // Stash any prior Veil first — TUN replaces SOCKS5 mode, both
-    // can't coexist under the same VeilState.
+async fn tun_start(
+    tun_state: State<'_, tun::TunState>,
+    state: State<'_, VeilState>,
+    args: tun::TunStartArgs,
+) -> Result<tun::TunStatus, String> {
+    // Stash any prior SOCKS5-mode Veil first.
     {
         let mut guard = state.inner.lock().expect("VeilState mutex poisoned");
         if let Some(prev) = guard.take() {
@@ -324,33 +327,34 @@ async fn tun_start(state: State<'_, VeilState>, config_text: String) -> Result<t
             drop(prev);
         }
     }
-    let status = tun::tun_start(&config_text, None)?;
+    // Stash any prior TUN session.
+    {
+        let mut guard = tun_state.inner.lock().expect("TunState mutex poisoned");
+        if let Some(prev) = guard.take() {
+            let _ = tun::tun_stop(prev);
+        }
+    }
+    let (status, session) = tun::tun_start(args)?;
+    *tun_state.inner.lock().expect("TunState mutex poisoned") = Some(session);
     Ok(status)
 }
 
 #[cfg(windows)]
 #[tauri::command]
-async fn tun_stop(state: State<'_, VeilState>) -> Result<(), String> {
-    // Mirror veil_stop's session-tear-down. The libveil session is
-    // owned through the same VeilState slot; dropping it runs the
-    // wintun pipe Close path automatically.
-    let v = {
-        let mut guard = state.inner.lock().expect("VeilState mutex poisoned");
+async fn tun_stop(tun_state: State<'_, tun::TunState>) -> Result<(), String> {
+    let session = {
+        let mut guard = tun_state.inner.lock().expect("TunState mutex poisoned");
         guard.take()
     };
-    if let Some(v) = v {
-        let _ = v.stop();
-        drop(v);
+    if let Some(session) = session {
+        tun::tun_stop(session)?;
     }
-    // Routes get cleaned up by the pipe's Close (adapter teardown
-    // removes routes through it); explicit netsh cleanup runs in the
-    // background since we don't want the user to wait.
     Ok(())
 }
 
 #[cfg(not(windows))]
 #[tauri::command]
-async fn tun_start(_state: State<'_, VeilState>, _config_text: String) -> Result<serde_json::Value, String> {
+async fn tun_start(_state: State<'_, VeilState>, _args: serde_json::Value) -> Result<serde_json::Value, String> {
     Err("TUN mode is currently Windows-only (macOS / Linux land in a follow-up).".into())
 }
 
@@ -362,8 +366,13 @@ async fn tun_stop(_state: State<'_, VeilState>) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .manage(VeilState::default())
+    let builder = tauri::Builder::default()
+        .manage(VeilState::default());
+
+    #[cfg(windows)]
+    let builder = builder.manage(tun::TunState::default());
+
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_store::Builder::default().build())

@@ -26,7 +26,7 @@
 use std::process::Command;
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use veil::Veil;
 
 const ADAPTER_NAME: &str = "Veil";
@@ -41,7 +41,10 @@ pub struct TunState {
 
 pub struct TunSession {
     pub veil: Veil,
-    pub server_ip: Option<String>,
+    /// CIDRs we explicitly routed through the original gateway. Kept
+    /// so the stop path knows what to clean up.
+    pub bypass_routes: Vec<String>,
+    pub original_gateway: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -49,6 +52,24 @@ pub struct TunStatus {
     pub active: bool,
     pub adapter: String,
     pub tun_ip: String,
+    pub bypass_count: usize,
+    pub original_gateway: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct TunStartArgs {
+    /// JSON or YAML or veil:// share link.
+    pub config_text: String,
+    /// CIDRs (or single IPs) the user wants kept off the tunnel —
+    /// LAN, gaming services, etc.
+    #[serde(default)]
+    pub bypass_cidrs: Vec<String>,
+    /// Server IPs (or hostnames the host already resolved). We
+    /// auto-bypass these so libveil's own outbound dial doesn't
+    /// loop through its own TUN. Pass at least the IPs of every
+    /// transport in the active config.
+    #[serde(default)]
+    pub server_ips: Vec<String>,
 }
 
 extern "C" {
@@ -63,7 +84,7 @@ extern "C" {
 
 /// Start a TUN-mode session. Returns Err with an actionable message
 /// when prerequisites are missing.
-pub fn tun_start(config_text: &str, _server_ip_hint: Option<String>) -> Result<TunStatus, String> {
+pub fn tun_start(args: TunStartArgs) -> Result<(TunStatus, TunSession), String> {
     if !is_elevated() {
         return Err(
             "TUN mode requires running Veil as Administrator. \
@@ -79,10 +100,47 @@ pub fn tun_start(config_text: &str, _server_ip_hint: Option<String>) -> Result<T
         );
     }
 
-    // 1. Veil::create — same C ABI as SOCKS5 mode.
-    let v = Veil::create(config_text).map_err(|e| format!("create: {e}"))?;
+    // 0. Capture the OS's existing default gateway BEFORE we install
+    //    the Wintun-pointing default; we need it for every bypass
+    //    route we install in step 2.
+    let original_gw = original_default_gateway();
+    let original_gw_str = original_gw
+        .clone()
+        .ok_or_else(|| "Could not determine the existing default gateway. Are you online?".to_string())?;
 
-    // 2. Pull the raw handle out so we can call the desktop-only
+    // 1. Veil::create — same C ABI as SOCKS5 mode.
+    let v = Veil::create(&args.config_text).map_err(|e| format!("create: {e}"))?;
+
+    // 2. Compute the bypass route set: server IPs (mandatory — without
+    //    them libveil's outbound dial loops through its own TUN) plus
+    //    user-supplied "always direct" CIDRs.
+    let mut bypass: Vec<String> = Vec::new();
+    for ip in &args.server_ips {
+        let cidr = if ip.contains('/') { ip.clone() } else { format!("{ip}/32") };
+        if !bypass.contains(&cidr) {
+            bypass.push(cidr);
+        }
+    }
+    for c in &args.bypass_cidrs {
+        let c = c.trim();
+        if c.is_empty() { continue; }
+        let cidr = if c.contains('/') { c.into() } else { format!("{c}/32") };
+        if !bypass.contains(&cidr) {
+            bypass.push(cidr);
+        }
+    }
+
+    // Install bypass routes BEFORE the Wintun default — they have
+    // metric=1 so they always win over the metric=5 default.
+    for cidr in &bypass {
+        if let Err(e) = add_bypass_route(cidr, &original_gw_str) {
+            // Log but don't abort; one bad CIDR shouldn't kill the
+            // whole connect.
+            eprintln!("tun: failed to add bypass route {cidr}: {e}");
+        }
+    }
+
+    // 3. Pull the raw handle out so we can call the desktop-only
     //    Wintun entry point. The handle is stable for the lifetime
     //    of the Veil; we still bind veil_start through the SDK so
     //    Drop runs the matching veil_stop / veil_destroy.
@@ -92,34 +150,50 @@ pub fn tun_start(config_text: &str, _server_ip_hint: Option<String>) -> Result<T
         veil_desktop_start_with_wintun(handle, adapter_c.as_ptr(), 1380, None, std::ptr::null_mut())
     };
     if rc != 0 {
+        // Clean up the bypass routes we already installed before
+        // bubbling the error up.
+        for cidr in &bypass {
+            let _ = del_bypass_route(cidr, &original_gw_str);
+        }
         return Err(format!("libveil: veil_desktop_start_with_wintun returned {rc}"));
     }
 
-    // 3. Assign the adapter an IP and install the default route.
+    // 4. Assign the adapter an IP and install the default route.
     configure_adapter()?;
-    Ok(TunStatus {
+
+    let status = TunStatus {
         active: true,
         adapter: ADAPTER_NAME.into(),
         tun_ip: TUN_IP.into(),
-    })
+        bypass_count: bypass.len(),
+        original_gateway: Some(original_gw_str.clone()),
+    };
+    let session = TunSession {
+        veil: v,
+        bypass_routes: bypass,
+        original_gateway: Some(original_gw_str),
+    };
+    Ok((status, session))
 }
 
-/// Tear down the TUN session: restore routes, drop the Veil instance
-/// (which closes the Wintun adapter via the cgo destroy path).
-pub fn tun_stop(state: &TunState) -> Result<(), String> {
-    {
-        let mut guard = state.inner.lock().expect("TunState mutex poisoned");
-        if let Some(session) = guard.take() {
-            // Restore routes before dropping libveil — once the
-            // adapter is gone the OS removes the routes that point
-            // through it anyway, but we run the explicit cleanup so
-            // the routing table reads cleanly between sessions.
-            let _ = restore_routes();
-            // Drop runs veil_stop + veil_destroy → mobile.WintunPipe.Close
-            // → tun.Close → adapter handle released.
-            drop(session);
+/// Tear down a previously-started TUN session. Removes every bypass
+/// route we installed, lets the Wintun adapter close via the libveil
+/// destroy path, and finally cleans the explicit default route.
+pub fn tun_stop(session: TunSession) -> Result<(), String> {
+    // 1. Drop user-installed bypass routes first so the routing
+    //    table doesn't leak entries between sessions.
+    if let Some(gw) = session.original_gateway.as_deref() {
+        for cidr in &session.bypass_routes {
+            let _ = del_bypass_route(cidr, gw);
         }
     }
+    // 2. Restore the default route. The adapter teardown removes
+    //    routes through it implicitly, but we run the explicit
+    //    cleanup so a torn-down session leaves the table clean.
+    let _ = restore_routes();
+    // 3. Drop the Veil — runs veil_stop + veil_destroy → WintunPipe
+    //    → adapter handle released.
+    drop(session.veil);
     Ok(())
 }
 
@@ -175,6 +249,57 @@ fn restore_routes() -> Result<(), String> {
     // net for the rare case where the adapter survives the process.
     let _ = sh("route", &["delete", "0.0.0.0", TUN_GATEWAY]);
     Ok(())
+}
+
+fn add_bypass_route(cidr: &str, gateway: &str) -> Result<(), String> {
+    let (dest, mask) = parse_cidr(cidr)?;
+    sh("route", &["add", &dest, "mask", &mask, gateway, "metric", "1"])
+}
+
+fn del_bypass_route(cidr: &str, gateway: &str) -> Result<(), String> {
+    let (dest, mask) = parse_cidr(cidr)?;
+    sh("route", &["delete", &dest, "mask", &mask, gateway])
+}
+
+fn parse_cidr(cidr: &str) -> Result<(String, String), String> {
+    if let Some((ip, prefix)) = cidr.split_once('/') {
+        let bits: u8 = prefix.parse().map_err(|_| format!("bad CIDR prefix in {cidr}"))?;
+        if bits > 32 {
+            return Err(format!("CIDR prefix > 32 in {cidr}"));
+        }
+        Ok((ip.into(), prefix_to_mask(bits)))
+    } else {
+        Ok((cidr.into(), "255.255.255.255".into()))
+    }
+}
+
+fn prefix_to_mask(prefix: u8) -> String {
+    let mask: u32 = if prefix == 0 { 0 } else { (!0u32) << (32 - prefix) };
+    let octets = mask.to_be_bytes();
+    format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3])
+}
+
+/// Best-effort current default gateway. Parses `route print 0.0.0.0`.
+fn original_default_gateway() -> Option<String> {
+    let out = Command::new("route")
+        .args(["print", "0.0.0.0"])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        // Active Routes section rows: dest mask gateway interface metric
+        if parts.len() >= 4 && parts[0] == "0.0.0.0" && parts[1] == "0.0.0.0" {
+            // Skip rows that point AT our own Wintun (TUN_GATEWAY) — we
+            // want the gateway that existed BEFORE we added the TUN
+            // default.
+            if parts[2] == TUN_GATEWAY {
+                continue;
+            }
+            return Some(parts[2].into());
+        }
+    }
+    None
 }
 
 fn sh(cmd: &str, args: &[&str]) -> Result<(), String> {
