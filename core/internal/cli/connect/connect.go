@@ -1,20 +1,25 @@
+// Veil VPN
+// Copyright 2026 Veil VPN Project Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+
 // Package connect wires the `veil connect` subcommand: load a client
-// configuration, dial the configured server over QUIC, perform the
-// Noise XK initiator role, and (in v0) exchange one encrypted hello
-// message as a smoke test.
+// configuration, dial the configured server over QUIC, run the
+// Noise XK initiator handshake, then expose a local SOCKS5 listener
+// that forwards each accepted connection through the established
+// Veil session.
 package connect
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"github.com/urfave/cli/v3"
 
 	"github.com/redstone-md/veil/core/internal/config"
 	"github.com/redstone-md/veil/core/internal/crypto"
+	"github.com/redstone-md/veil/core/internal/proxy"
 	"github.com/redstone-md/veil/core/internal/session"
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
 )
@@ -23,7 +28,7 @@ import (
 func Command() *cli.Command {
 	return &cli.Command{
 		Name:  "connect",
-		Usage: "Connect to a Veil server (v0 smoke-test client)",
+		Usage: "Connect to a Veil server and expose a local SOCKS5 proxy",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "config",
@@ -42,6 +47,10 @@ func run(ctx context.Context, cfgPath string) error {
 	cfg, err := config.LoadClient(cfgPath)
 	if err != nil {
 		return err
+	}
+	socksAddr := cfg.SOCKS5Listen
+	if socksAddr == "" {
+		socksAddr = "127.0.0.1:1080"
 	}
 
 	staticKP, err := crypto.LoadOrCreateKeypair(cfg.StaticKeyPath)
@@ -71,29 +80,33 @@ func run(ctx context.Context, cfgPath string) error {
 	}
 	slog.Info("session established")
 
-	// v0 smoke-test exchange.
-	hello := []byte("veil-client: hello")
-	cipher, err := established.Send.Encrypt(nil, nil, hello)
-	if err != nil {
-		return fmt.Errorf("encrypt hello: %w", err)
-	}
-	if _, err := conn.Write(cipher); err != nil {
-		return fmt.Errorf("write hello: %w", err)
-	}
+	secure := session.NewSecureChannel(conn, established)
+	sess := session.New(secure, session.Options{Role: session.RoleClient})
 
-	const maxMsg = 64 * 1024
-	buf := make([]byte, maxMsg)
-	n, err := conn.Read(buf)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return fmt.Errorf("read reply: %w", err)
+	runErr := make(chan error, 1)
+	go func() { runErr <- sess.Run() }()
+
+	socks := proxy.NewSOCKS5(sess, slog.Default())
+	socksErr := make(chan error, 1)
+	go func() { socksErr <- socks.ListenAndServe(ctx, socksAddr) }()
+
+	slog.Info("ready", "socks5", socksAddr, "tunnel", cfg.ServerAddr)
+
+	select {
+	case err := <-runErr:
+		_ = sess.Close()
+		if err != nil {
+			return fmt.Errorf("session: %w", err)
+		}
+		return nil
+	case err := <-socksErr:
+		_ = sess.Close()
+		if err != nil {
+			return fmt.Errorf("socks5: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		_ = sess.Close()
+		return nil
 	}
-	if n == 0 {
-		return errors.New("read reply: empty response")
-	}
-	plaintext, err := established.Recv.Decrypt(nil, nil, buf[:n])
-	if err != nil {
-		return fmt.Errorf("decrypt reply: %w", err)
-	}
-	slog.Info("server reply received", "payload", string(plaintext))
-	return nil
 }

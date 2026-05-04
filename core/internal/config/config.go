@@ -44,6 +44,10 @@ type ClientConfig struct {
 	// StaticKeyPath is the path to the client's own Noise XK static
 	// keypair. Created on first run if absent.
 	StaticKeyPath string `yaml:"static_key_path"`
+
+	// SOCKS5Listen is the host:port the local SOCKS5 proxy binds to.
+	// Defaults to "127.0.0.1:1080" when empty.
+	SOCKS5Listen string `yaml:"socks5_listen"`
 }
 
 // Validate returns an error if the server configuration is incomplete.
