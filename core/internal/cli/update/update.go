@@ -86,6 +86,23 @@ func applyCmd() *cli.Command {
 				Name:  "target",
 				Usage: "Path of the binary to replace (defaults to the running executable)",
 			},
+			&cli.BoolFlag{
+				Name:  "cosign",
+				Usage: "Require a valid Sigstore (cosign keyless) signature on the asset",
+			},
+			&cli.StringFlag{
+				Name:  "cosign-subject",
+				Usage: "Expected Subject (SAN URI) inside the signing certificate; defaults to the project release workflow",
+			},
+			&cli.StringFlag{
+				Name:  "cosign-issuer",
+				Usage: "Expected OIDC issuer for the signing certificate",
+				Value: "https://token.actions.githubusercontent.com",
+			},
+			&cli.StringFlag{
+				Name:  "cosign-trusted-root",
+				Usage: "Path to a Sigstore TrustedRoot JSON (offline mode)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := upd.New(cmd.String("repo"))
@@ -111,6 +128,27 @@ func applyCmd() *cli.Command {
 			if err != nil {
 				return err
 			}
+			verifiers := []upd.Verifier{upd.ChecksumVerifier{ExpectedHex: expected}}
+			fmt.Printf("Verifying SHA-256 (%s…)…\n", expected[:12])
+
+			if cmd.Bool("cosign") {
+				bundle, err := fetchCosignBundle(ctx, c, r, asset.Name+".sigstore")
+				if err != nil {
+					return fmt.Errorf("cosign: %w", err)
+				}
+				subject := cmd.String("cosign-subject")
+				if subject == "" {
+					subject = defaultCosignSubject(cmd.String("repo"), r.TagName)
+				}
+				verifiers = append(verifiers, upd.CosignVerifier{
+					BundleJSON:      bundle,
+					Subject:         subject,
+					Issuer:          cmd.String("cosign-issuer"),
+					TrustedRootPath: cmd.String("cosign-trusted-root"),
+				})
+				fmt.Printf("Verifying Sigstore signature (subject=%s)…\n", subject)
+			}
+
 			target := cmd.String("target")
 			if target == "" {
 				exe, err := os.Executable()
@@ -119,8 +157,7 @@ func applyCmd() *cli.Command {
 				}
 				target = exe
 			}
-			fmt.Printf("Verifying SHA-256 (%s…)…\n", expected[:12])
-			err = upd.Replace(target, blob, upd.ChecksumVerifier{ExpectedHex: expected})
+			err = upd.Replace(target, blob, verifiers...)
 			switch {
 			case err == nil:
 				fmt.Println("Installed.")
@@ -136,6 +173,27 @@ func applyCmd() *cli.Command {
 			}
 		},
 	}
+}
+
+// fetchCosignBundle pulls the Sigstore bundle blob (typically named
+// `<asset>.sigstore`) attached to the release.
+func fetchCosignBundle(ctx context.Context, c *upd.Client, r *upd.Release, name string) ([]byte, error) {
+	for i := range r.Assets {
+		if r.Assets[i].Name == name {
+			return c.Download(ctx, &r.Assets[i])
+		}
+	}
+	return nil, fmt.Errorf("no %q asset on release", name)
+}
+
+// defaultCosignSubject builds the canonical SAN URI for a release
+// signed by the project's GitHub Actions release workflow. Operators
+// who use a different workflow should pass --cosign-subject.
+func defaultCosignSubject(repo, tag string) string {
+	return fmt.Sprintf(
+		"https://github.com/%s/.github/workflows/release.yml@refs/tags/%s",
+		repo, tag,
+	)
 }
 
 // isNewer is a deliberately conservative semver comparator: it
