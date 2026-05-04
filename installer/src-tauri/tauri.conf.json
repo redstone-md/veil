@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Veil Installer",
+  "version": "0.0.1",
+  "identifier": "org.veil.installer",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Veil Installer",
+        "width": 880,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 520,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "fs": { "scope": ["$DESKTOP/*", "$DOWNLOAD/*", "$DOCUMENT/*"] }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Utility",
+    "shortDescription": "Veil VPN GUI installer",
+    "longDescription": "Generates server configuration and (in upcoming revisions) drives the remote install of a Veil VPN server.",
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}

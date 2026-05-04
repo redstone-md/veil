@@ -39,8 +39,15 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       `admin_users` table, a minimal HTML dashboard served from the same
       binary, and an [INSTALL guide](docs/INSTALL.md) walking through
       end-to-end bring-up.
-- [ ] **Phase 3.5** — Self-host UX (GUI half): Tauri installer, ACME for
-      WSS / Reality production certs, browser-grade Web UI.
+- [x] **Phase 3.5** — Operator polish: caddyserver/certmagic-backed
+      ACME (Let's Encrypt) for WSS/Reality, per-user quota enforcement
+      in the data path (in-flight cutoff, monthly reset), polished
+      Web admin UI (sortable / filterable table, inline quota and
+      expiry editors), and a Tauri installer **scaffold** with the
+      Docker compose generator workflow wired up. SSH and edge
+      installer paths land in the next milestone.
+- [ ] **Phase 3.6** — Tauri installer: SSH remote install + edge
+      OAuth flows; cross-platform release packaging.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
 
 APIs, configuration formats, and the wire protocol are unstable and will
