@@ -46,24 +46,93 @@ significant private patches.
 
 ## Implementation plan (for the next revision)
 
-1. **Server**:
-   - HTTP/3 listener built on `quic-go/http3` (already a transitive
-     dependency via the QUIC adapter).
-   - Handler binds the configured path (default `/masque`) and
-     parses CONNECT-UDP capsules per RFC 9298.
-   - Each accepted CONNECT-UDP session yields a UDP-flow handle
-     that is wired into the existing transport.Conn machinery.
-   - Authentication remains the Noise XK responder layer above; no
-     transport-level token is required (the URL path can be
-     randomised per deployment, which is sufficient against
-     untargeted scanners).
+We have prototyped against `quic-go/masque-go` v0.3 to validate the
+shape; the headline observations are recorded below so the next
+attempt does not re-walk the discovery.
 
-2. **Client**:
-   - HTTP/3 client (uTLS-shaped Hello via `refraction-networking/uquic`
-     once that lands in stable, otherwise stdlib + a clear
-     fingerprint warning) issues an extended-CONNECT for `:protocol = connect-udp`.
-   - The capsule pipe becomes the transport.Conn the rest of the
-     client stack consumes.
+### `masque-go` API as of v0.3
+
+```go
+// Client
+type Client struct {
+    TLSClientConfig *tls.Config
+    QUICConfig      *quic.Config
+}
+func (c *Client) DialAddr(ctx, proxyTemplate, target) (net.PacketConn, *http.Response, error)
+
+// Server
+type Proxy struct { /* unexported */ }
+func (s *Proxy) Proxy(w http.ResponseWriter, r *Request) error
+func (s *Proxy) ProxyConnectedSocket(w, _ *Request, conn *net.UDPConn) error
+```
+
+### Architectural shape that follows from that API
+
+`DialAddr` returns a `net.PacketConn`, not a `net.Conn`. CONNECT-UDP
+is fundamentally a datagram tunnel; to give the rest of the Veil
+stack a byte-stream `transport.Conn`, the natural approach is to
+**run an inner QUIC session over the PacketConn**:
+
+```
++-----------------+   inner Noise-encrypted VWP/1
+| Veil session    |   (on top of an inner QUIC stream)
++-----------------+
+| inner QUIC      |   quic-go session driven over the PacketConn
++-----------------+
+| MASQUE          |   masque-go Client.DialAddr / Proxy.Proxy
++-----------------+
+| HTTP/3 + TLS    |   quic-go/http3
++-----------------+
+| outer QUIC      |   quic-go session to the proxy
++-----------------+
+```
+
+This is **nested QUIC**: outer QUIC carries HTTP/3 carrying CONNECT-
+UDP capsules carrying inner QUIC datagrams carrying inner QUIC
+streams carrying Noise XK carrying VWP/1. Each outer/inner layer
+has its own congestion control, retransmission, and TLS handshake.
+Double-encryption and double-CC are real costs to factor in before
+recommending MASQUE as anyone's primary transport.
+
+### Server side (when we ship)
+
+- Bind `quic-go/http3.Server` on the configured port.
+- Register an HTTP handler at `cfg.Path` (default `/masque`,
+  randomised per deployment) that parses CONNECT-UDP via
+  `masque.ParseRequest` against an URI template.
+- For each accepted request, dial an internal UDP loopback that
+  hosts our existing QUIC-Noise listener; hand the loopback's
+  `*net.UDPConn` to `Proxy.ProxyConnectedSocket` so the masque
+  layer pumps datagrams between the HTTP/3 capsule stream and the
+  inner QUIC ingress.
+- The QUIC-Noise listener is unchanged; it sees a regular UDP
+  flow on a high port.
+
+### Client side (when we ship)
+
+- Build a `masque.Client` with TLS config sourced from the WSS-
+  family ACME path (so a Reality-fronted MASQUE deployment can
+  reuse one cert).
+- `DialAddr` to obtain a `net.PacketConn`.
+- Construct a fresh `quic-go` session over that PacketConn,
+  ALPN-negotiating the same way the bare-QUIC transport does.
+- The resulting QUIC stream becomes the `transport.Conn` the
+  rest of the client stack consumes.
+
+### What is gating the ship
+
+- `quic-go/masque-go` is at v0.3, and `quic-go` itself flags the
+  HTTP/3 + datagram surface as experimental. Pinning to a single
+  pair of revisions is a manageable cost; chasing breaking changes
+  every minor release is not.
+- We need a credible **uTLS-shaped HTTP/3 ClientHello** for the
+  outer connection or the cover story is weakened relative to
+  Reality. `refraction-networking/uquic` exists but is also pre-1.0
+  and not yet plug-and-play with `masque-go`.
+- The nested-QUIC stack needs end-to-end perf benchmarking; if the
+  steady-state throughput penalty is large enough to make MASQUE
+  unattractive for everyone except the most paranoid users, the
+  feature is not worth the maintenance burden.
 
 3. **Edge mode**:
    - MASQUE pairs naturally with the Edge backend story (ADR-0004):

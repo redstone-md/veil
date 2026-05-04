@@ -75,9 +75,17 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       reference Deno Deploy worker (`deploy/edge/deno/`) +
       ADR-0004 documenting the trust model and Fly.io variant
       plan.
-- [ ] **Phase 5.6** — Functional MASQUE implementation, Fly.io
-      edge variant, Sigstore (cosign keyless) signature
-      verification on auto-updates.
+- [x] **Phase 5.6 (auto-update + edge polish)** — Sigstore
+      cosign-keyless signature verification on auto-updates
+      (`veil update apply --cosign`), a Fly.io edge worker
+      (`deploy/edge/fly/`) functionally equivalent to the Deno
+      Deploy reference but suitable for operators who need the
+      regions / bandwidth / container debuggability Fly offers,
+      and a deeper ADR-0003 update with the concrete `masque-go`
+      v0.3 API findings + nested-QUIC architecture sketch.
+- [ ] **Phase 5.7** — Functional MASQUE implementation once
+      `quic-go/masque-go` and `refraction-networking/uquic`
+      stabilise; perf benchmarks vs. bare QUIC and Reality.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
 
 APIs, configuration formats, and the wire protocol are unstable and will
