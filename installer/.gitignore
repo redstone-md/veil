@@ -18,3 +18,5 @@ Thumbs.db
 # Tauri build artefacts
 src-tauri/gen/
 src-tauri/icons/icon.png
+# A placeholder icon.ico is committed so tauri-build can run on a
+# fresh Windows clone; real artwork replaces it in Phase 6.5.

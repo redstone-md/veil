@@ -21,6 +21,8 @@ function render() {
       renderDocker();
       break;
     case "ssh":
+      renderSSH();
+      break;
     case "edge":
       renderComingSoon(state.route);
       break;
@@ -53,12 +55,12 @@ function renderHome() {
     el("p", { class: "subtitle" }, "Choose how you want to deploy your server."),
     el("div", { class: "choice-grid" },
       choice("Docker", "Generate a docker-compose.yml you can scp to a host with Docker installed.", () => nav("docker")),
-      choice("VPS via SSH", "Connect to a fresh VPS and install via SSH (planned).", () => nav("ssh")),
+      choice("VPS via SSH", "Connect to a fresh VPS and install Veil via SSH end-to-end.", () => nav("ssh")),
       choice("Edge function", "Deploy to Deno Deploy / Fly.io as an edge proxy (planned).", () => nav("edge")),
     ),
     el("div", { class: "notice" },
       el("strong", {}, "Pre-alpha. "),
-      "This installer is in early development. The Docker workflow generates a working compose file; SSH and Edge are scaffolds for upcoming work."
+      "Docker and SSH workflows are functional; the Edge workflow is a scaffold for upcoming work."
     ),
   );
 }
@@ -170,18 +172,154 @@ volumes:
 }
 
 function renderComingSoon(route) {
+  // Only the edge route stays a placeholder now; SSH has its own
+  // renderer below.
   root.append(
-    el("h1", {}, route === "ssh" ? "VPS via SSH" : "Edge function"),
+    el("h1", {}, "Edge function"),
     el("p", { class: "subtitle" }, "Not yet implemented in this revision."),
     el("div", { class: "notice" },
-      "The ", el("strong", {}, route === "ssh" ? "SSH" : "edge-function"), " workflow is on the Phase 3.5+ roadmap. ",
-      "Until it lands, use the Docker compose path or follow the manual install in ",
-      el("code", {}, "docs/INSTALL.md"), "."
+      "The edge-function workflow (Deno Deploy / Fly.io OAuth) is ",
+      "on the Phase 3.7+ roadmap. Until it lands, use the Docker ",
+      "compose path or run the reference workers in ",
+      el("code", {}, "deploy/edge/"), " by hand."
     ),
     el("div", { class: "actions" },
       el("button", { onclick: () => nav("home") }, "← Back"),
     ),
   );
+}
+
+function renderSSH() {
+  const f = state.form;
+  const onChange = (key) => (ev) => { f[key] = ev.target.value; };
+
+  const credBlock = el("div", {},
+    el("h2", {}, "SSH credentials"),
+    field("Host (IP or DNS name)", "host", f.host || "", onChange("host")),
+    field("Port", "port", f.port || "22", onChange("port")),
+    field("Username", "username", f.username || "root", onChange("username")),
+    field("Password (or leave blank for key-based auth)", "password", f.password || "", onChange("password")),
+  );
+
+  const cfgBlock = el("div", {},
+    el("h2", {}, "Veil server configuration"),
+    field("Public host name", "domain", f.domain || "", onChange("domain")),
+    field("Reality target SNI", "target_sni", f.target_sni || "www.cloudflare.com", onChange("target_sni")),
+    field("ACME email (Let's Encrypt; leave blank to use a self-signed cert)", "email", f.email || "", onChange("email")),
+  );
+
+  const status = el("div", { class: "notice", style: "display:none" });
+  const stepsBox = el("ol", {});
+
+  const probeBtn = el("button", { onclick: async () => {
+    status.style.display = "block";
+    status.textContent = "Probing host…";
+    try {
+      const target = sshTarget(f);
+      const result = await invoke("ssh_probe", { target });
+      status.innerHTML = `<strong>Probe OK</strong> (status ${result.status})<br/><pre style="white-space:pre-wrap;font-family:JetBrains Mono,Consolas,monospace;font-size:0.8rem;color:var(--muted);margin:0.5rem 0 0">${escape(result.stdout)}</pre>`;
+    } catch (e) {
+      status.innerHTML = `<strong style="color:var(--red)">Probe failed:</strong> ${escape(String(e))}`;
+    }
+  }}, "Probe host");
+
+  const installBtn = el("button", { class: "primary", onclick: async () => {
+    status.style.display = "block";
+    status.textContent = "Reading bundled veil binary…";
+    stepsBox.innerHTML = "";
+    try {
+      const target = sshTarget(f);
+      // For the v0 GUI we ship the binary ourselves; the Tauri
+      // resource layer hands us its bytes. Until that resource is
+      // wired we expose a file-pick fallback so contributors can
+      // exercise the install path locally.
+      const veilBytes = await pickVeilBinary();
+      if (!veilBytes) { status.textContent = "No binary chosen; aborting."; return; }
+      status.textContent = "Installing — this may take 10-15 seconds…";
+      const plan = {
+        target,
+        veil_binary_b64: veilBytes,
+        server_yaml: generateServerYAML(f),
+      };
+      const steps = await invoke("ssh_install", { plan });
+      status.innerHTML = `<strong>Install completed.</strong> See per-step results below.`;
+      for (const step of steps) {
+        const li = el("li", {});
+        li.innerHTML = `<strong style="color:${step.ok?'var(--green)':'var(--red)'}">${step.ok?'✓':'✗'}</strong> ${escape(step.label)}<br/><span class="muted" style="font-size:0.8rem;white-space:pre-wrap">${escape(step.detail)}</span>`;
+        stepsBox.append(li);
+      }
+    } catch (e) {
+      status.innerHTML = `<strong style="color:var(--red)">Install failed:</strong> ${escape(String(e))}`;
+    }
+  }}, "Install Veil");
+
+  root.append(
+    el("h1", {}, "VPS via SSH"),
+    el("p", { class: "subtitle" }, "Provision a fresh VPS over SSH: upload the binary, write the config, register a systemd unit, start the service."),
+    credBlock,
+    cfgBlock,
+    el("div", { class: "actions" },
+      el("button", { onclick: () => nav("home") }, "← Back"),
+      el("div", { class: "spacer" }),
+      probeBtn,
+      installBtn,
+    ),
+    status,
+    stepsBox,
+  );
+}
+
+// ---------- helpers ----------
+
+function sshTarget(f) {
+  return {
+    host: (f.host || "").trim(),
+    port: parseInt(f.port || "22", 10) || 22,
+    username: (f.username || "root").trim(),
+    password: f.password || null,
+    private_key_pem: null,
+    timeout_secs: 20,
+  };
+}
+
+function generateServerYAML(f) {
+  const targetSNI = f.target_sni || "www.cloudflare.com";
+  const acme = f.email
+    ? `acme:\n  email: "${f.email}"\n  cache_dir: "/var/lib/veil/acme"\n\n`
+    : "";
+  const domain = f.domain ? `    domain: "${f.domain}"\n` : "";
+  return `transports:
+  - type: reality
+    listen: "0.0.0.0:443"
+    target_sni: "${targetSNI}"
+    target_addr: "${targetSNI}:443"
+${domain}
+${acme}static_key_path: "/var/lib/veil/server.key"
+user_db_path:    "/var/lib/veil/users.db"
+`;
+}
+
+async function pickVeilBinary() {
+  // Pop a file picker and return base64 bytes. Tauri 2 dialog
+  // plugin returns a path; we then read via FileSystem plugin.
+  return new Promise(async (resolve) => {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.onchange = async () => {
+      const file = inp.files?.[0];
+      if (!file) { resolve(null); return; }
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
+      resolve(btoa(bin));
+    };
+    inp.click();
+  });
+}
+
+function escape(s) {
+  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 
 async function copy(text) {
