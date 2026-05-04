@@ -74,18 +74,33 @@ async fn veil_start(
         }
     }
 
+    // Build the Veil and IMMEDIATELY install it into the state slot
+    // before calling start. The veil-rs SDK records `&self as *const
+    // Veil` as the C-side user_data; if we call start while v lives
+    // on the async-fn stack and only move v into state afterwards,
+    // the user_data pointer is left dangling at the moved-from
+    // location and the first event callback corrupts memory. Putting
+    // v into the Mutex first means start() borrows from a stable
+    // location.
     let v = Veil::create(&config_text).map_err(|e| format!("create: {e}"))?;
-    let app_for_cb = app.clone();
-    let cb: EventHandler = Arc::new(move |e: Event| {
-        // Drop the result; if the frontend isn't listening yet
-        // there's nothing meaningful to do.
-        let _ = app_for_cb.emit("veil-event", UiEvent::from(e.clone()));
-        notify_event(&app_for_cb, &e);
-    });
-    v.start(Some(cb)).map_err(|e| format!("start: {e}"))?;
-
     let mut guard = state.inner.lock().expect("VeilState mutex poisoned");
     *guard = Some(v);
+    let v_ref = guard.as_ref().expect("just inserted");
+
+    let app_for_cb = app.clone();
+    // The callback fires from a libveil-internal goroutine. Anything
+    // that touches Tauri (emit) or the OS (notification toast) MUST
+    // be hopped onto an async task — calling them synchronously from
+    // the goroutine wedges Go's scheduler if the OS-side blocks even
+    // briefly (Windows Toast init is the worst offender).
+    let cb: EventHandler = Arc::new(move |e: Event| {
+        let app = app_for_cb.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = app.emit("veil-event", UiEvent::from(e.clone()));
+            notify_event(&app, &e);
+        });
+    });
+    v_ref.start(Some(cb)).map_err(|e| format!("start: {e}"))?;
     Ok(())
 }
 
