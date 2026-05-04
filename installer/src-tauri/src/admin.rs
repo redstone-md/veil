@@ -47,6 +47,17 @@ pub async fn version(creds: &ServerCreds) -> Result<VersionInfo> {
 /// (active users, throughput, uptime, ...). Shape pass-through; the
 /// frontend consumes the JSON directly so the schema can evolve
 /// server-side without bumping this client.
+pub async fn server_info(creds: &ServerCreds) -> Result<Value> {
+    let url = format!("{}/api/server-info", creds.base_url.trim_end_matches('/'));
+    let resp = client()?
+        .get(&url)
+        .header("Authorization", basic(creds))
+        .send()
+        .await
+        .context("admin: GET server-info")?;
+    handle(resp).await
+}
+
 pub async fn dashboard(creds: &ServerCreds) -> Result<Value> {
     let url = format!("{}/api/dashboard", creds.base_url.trim_end_matches('/'));
     let resp = client()?

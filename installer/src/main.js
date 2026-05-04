@@ -456,20 +456,101 @@ function openShareLink(s, u) {
   });
 }
 
-function openShareLinkComposer(s, user, privB64) {
-  // Build the share link client-side from the server profile + the
-  // freshly-issued private key. The server's static pubkey is in the
-  // probe / dashboard; if missing, the operator has to type it once.
-  const probe = state.serverProbes[s.id] || {};
-  const serverPub = (probe.dashboard && (probe.dashboard.server_pubkey_b64 || probe.dashboard.static_pubkey_b64)) || "";
+async function openShareLinkComposer(s, user, privB64) {
+  // Fetch the server's full topology so we can pre-fill every
+  // technical field — the operator should not need to know what a
+  // base64 pubkey is, let alone type one.
+  const creds = { base_url: s.base_url, username: s.basic_user, password: s.basic_pass };
+  let info = null;
+  try {
+    info = await invoke("admin_server_info", { creds });
+  } catch (e) {
+    toast("Could not fetch server info: " + e + ". Re-run admin with --server-config to enable auto-fill.", "error");
+  }
+  const transports = (info && info.transports) || [];
+  const serverPub = (info && info.static_pubkey_b64) || "";
 
+  if (!serverPub || transports.length === 0) {
+    // Fall back to the manual composer when the admin process was
+    // started without --server-config.
+    openShareLinkComposerManual(s, user, privB64);
+    return;
+  }
+
+  // Pre-build options. Default to reality if available, else first.
+  let selected = transports.find((t) => t.type === "reality") || transports[0];
+
+  const renderForm = () => {
+    const transportSelect = el("select", {
+      onchange: (ev) => {
+        const idx = Number(ev.target.value);
+        selected = transports[idx];
+        // re-render to reveal/hide SNI field as needed
+        state.modal._values.transport_idx = String(idx);
+        state.modal._values.addr = selected.addr;
+        state.modal._values.sni  = selected.sni || "";
+        render();
+      },
+    });
+    transports.forEach((t, i) => {
+      transportSelect.append(opt(String(i), `${t.type.toUpperCase()} — ${t.addr}`, t === selected));
+    });
+
+    const fields = [
+      { key: "addr", label: "Server host:port", initial: selected.addr },
+    ];
+    if (selected.type === "reality" || selected.type === "wss") {
+      fields.push({ key: "sni", label: "TLS SNI", initial: selected.sni || "www.microsoft.com" });
+    }
+
+    return { transportSelect, fields };
+  };
+
+  const { transportSelect, fields } = renderForm();
   openModal({
     title: "Share link",
-    body: "Hand this single string to the user; they paste it into the desktop / mobile client.",
+    body: `Server pubkey, transports and ports auto-filled from ${s.label}. Just pick which transport.`,
+    bodyExtra: el("div", { class: "modal-field" },
+      el("label", { class: "fieldlabel" }, "Transport"),
+      transportSelect,
+    ),
+    fields,
+    submitLabel: "Generate",
+    onSubmit: async (vals) => {
+      const cfg = {
+        Servers: [{
+          Type: selected.type,
+          Addr: vals.addr || selected.addr,
+          SNI: vals.sni || selected.sni || "",
+          Insecure: null,
+          Path: selected.path || "",
+          Fingerprint: (selected.type === "reality" || selected.type === "wss") ? "chrome" : "",
+        }],
+        ServerStaticKeyB64: serverPub,
+        StaticKeyPath: "",
+        StaticKeyInlineB64: privB64,
+        SOCKS5Listen: "127.0.0.1:1080",
+        Decoy: { Enabled: false, Region: "", Concurrency: 0, IntervalMS: 0, ShardSize: 0, Fingerprint: "" },
+        Mimicry: "",
+      };
+      const link = "veil://" + b64url(JSON.stringify(cfg));
+      showLinkModal(user, link);
+    },
+  });
+}
+
+// Manual composer kept as a fallback for older servers that don't
+// expose /api/server-info.
+function openShareLinkComposerManual(s, user, privB64) {
+  const probe = state.serverProbes[s.id] || {};
+  const serverPub = (probe.dashboard && (probe.dashboard.server_pubkey_b64 || probe.dashboard.static_pubkey_b64)) || "";
+  openModal({
+    title: "Share link",
+    body: "Server's /api/server-info is empty — restart admin with `--server-config /etc/veil/server.yaml --public-host <fqdn>` to enable auto-fill, or fill the fields manually.",
     fields: [
       { key: "server_pubkey", label: "Server static pubkey (base64)", initial: serverPub },
       { key: "addr",          label: "Server host:port",              placeholder: "vps.example.com:443" },
-      { key: "transport",     label: "Transport",                     initial: "reality" },
+      { key: "transport",     label: "Transport (reality / wss / quic / masque)", initial: "reality" },
       { key: "sni",           label: "TLS SNI (Reality / WSS)",       initial: "www.microsoft.com" },
     ],
     submitLabel: "Generate",
@@ -487,29 +568,32 @@ function openShareLinkComposer(s, user, privB64) {
         Mimicry: "",
       };
       const link = "veil://" + b64url(JSON.stringify(cfg));
-      const input = el("input", {
-        type: "text",
-        readonly: "",
-        onclick: (ev) => ev.target.select(),
-      });
-      input.value = link;
-      const copyBtn = el("button", { class: "smallbtn", onclick: () => {
-        input.select();
-        try { document.execCommand("copy"); toast("Copied.", "success"); }
-        catch (e) { toast("Copy failed: select the text and Ctrl-C.", "error"); }
-      } }, "Copy");
-      openModal({
-        title: `Link for ${user.name || user.id}`,
-        body: "Click the field to select all, then Ctrl-C — or use the Copy button.",
-        bodyExtra: el("div", { style: "display:flex; gap:8px; align-items:center" }, input, copyBtn),
-        submitLabel: "Done",
-        cancelLabel: null,
-        onSubmit: () => {},
-      });
-      // auto-select on open so Ctrl-C works without an extra click
-      setTimeout(() => input.select(), 50);
+      showLinkModal(user, link);
     },
   });
+}
+
+function showLinkModal(user, link) {
+  const input = el("input", {
+    type: "text",
+    readonly: "",
+    onclick: (ev) => ev.target.select(),
+  });
+  input.value = link;
+  const copyBtn = el("button", { class: "smallbtn", onclick: () => {
+    input.select();
+    try { document.execCommand("copy"); toast("Copied.", "success"); }
+    catch (e) { toast("Copy failed: select the text and Ctrl-C.", "error"); }
+  } }, "Copy");
+  openModal({
+    title: `Link for ${user.name || user.id}`,
+    body: "Click the field to select all, then Ctrl-C — or use the Copy button.",
+    bodyExtra: el("div", { style: "display:flex; gap:8px; align-items:center" }, input, copyBtn),
+    submitLabel: "Done",
+    cancelLabel: null,
+    onSubmit: () => {},
+  });
+  setTimeout(() => input.select(), 50);
 }
 
 async function deleteUser(s, u) {

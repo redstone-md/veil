@@ -34,10 +34,11 @@ var indexHTML []byte
 
 // Server is the embedded admin HTTP service.
 type Server struct {
-	store  *users.Store
-	logger *slog.Logger
-	addr   string
-	srv    *http.Server
+	store      *users.Store
+	logger     *slog.Logger
+	addr       string
+	srv        *http.Server
+	serverInfo *ServerInfo
 }
 
 // Config parameterises a Server.
@@ -50,6 +51,27 @@ type Config struct {
 
 	// Logger receives operational events.
 	Logger *slog.Logger
+
+	// ServerInfo, when set, surfaces the running server's static
+	// pubkey and transport list through /api/server-info so that
+	// installer / GUI consumers can compose share-links without
+	// asking the operator to type or copy these values by hand.
+	ServerInfo *ServerInfo
+}
+
+// ServerInfo describes a running Veil server enough for clients to
+// build a working veil:// share-link without operator copy-paste.
+type ServerInfo struct {
+	StaticPubkeyB64 string          `json:"static_pubkey_b64"`
+	Transports      []TransportInfo `json:"transports"`
+}
+
+// TransportInfo is one wire-level adapter the server exposes.
+type TransportInfo struct {
+	Type string `json:"type"`           // "reality" / "wss" / "quic" / "masque"
+	Addr string `json:"addr"`           // host:port the operator binds
+	SNI  string `json:"sni,omitempty"`  // for reality / wss
+	Path string `json:"path,omitempty"` // for wss / masque
 }
 
 // New constructs the admin server.
@@ -72,9 +94,10 @@ func New(cfg Config) (*Server, error) {
 	}
 
 	s := &Server{
-		store:  cfg.Store,
-		logger: cfg.Logger,
-		addr:   cfg.Addr,
+		store:      cfg.Store,
+		logger:     cfg.Logger,
+		addr:       cfg.Addr,
+		serverInfo: cfg.ServerInfo,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
@@ -82,6 +105,7 @@ func New(cfg Config) (*Server, error) {
 	mux.HandleFunc("/api/users", s.requireAuth(s.handleUsers))
 	mux.HandleFunc("/api/users/", s.requireAuth(s.handleUserOne))
 	mux.HandleFunc("/api/version", s.handleVersion)
+	mux.HandleFunc("/api/server-info", s.requireAuth(s.handleServerInfo))
 	s.srv = &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           mux,
@@ -139,6 +163,18 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(indexHTML)
+}
+
+// handleServerInfo returns the server-side information installer /
+// GUI clients need to assemble a working share-link without forcing
+// the operator to copy any base64 by hand. Empty (or near-empty)
+// when admin runs without --server-config.
+func (s *Server) handleServerInfo(w http.ResponseWriter, _ *http.Request) {
+	if s.serverInfo == nil {
+		writeJSON(w, http.StatusOK, ServerInfo{})
+		return
+	}
+	writeJSON(w, http.StatusOK, *s.serverInfo)
 }
 
 func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {

@@ -232,6 +232,11 @@ async fn admin_dashboard(creds: admin::ServerCreds) -> Result<serde_json::Value,
 }
 
 #[tauri::command]
+async fn admin_server_info(creds: admin::ServerCreds) -> Result<serde_json::Value, String> {
+    admin::server_info(&creds).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 async fn admin_users_list(creds: admin::ServerCreds) -> Result<serde_json::Value, String> {
     admin::users_list(&creds).await.map_err(|e| format!("{e:#}"))
 }
@@ -297,6 +302,7 @@ pub fn run() {
             release_fetch_veil,
             admin_version,
             admin_dashboard,
+            admin_server_info,
             admin_users_list,
             admin_user_add,
             admin_user_delete,
