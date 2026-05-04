@@ -1,0 +1,57 @@
+# fly.toml — Veil edge worker on Fly.io
+#
+# Edit `app` to match the application name you create with
+# `fly apps create`. The `[env]` block is the place to set the
+# origin host; everything else is pre-tuned for the small-edge
+# free tier.
+#
+# Bring-up:
+#
+#     fly apps create veil-edge-yourname
+#     fly secrets set VEIL_ORIGIN_HOST=vps.example.com \
+#                     VEIL_ORIGIN_PORT=18444 \
+#                     VEIL_PATH=/api/sync
+#     fly deploy
+#
+# After deploy, the worker is reachable at
+# https://veil-edge-yourname.fly.dev/<VEIL_PATH> as a WSS endpoint.
+
+app = "veil-edge"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  VEIL_LISTEN = ":8080"
+  # VEIL_ORIGIN_HOST, VEIL_ORIGIN_PORT, VEIL_PATH come from
+  # `fly secrets set` so they are not committed to source.
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
