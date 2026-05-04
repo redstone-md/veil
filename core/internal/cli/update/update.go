@@ -10,6 +10,7 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -46,12 +47,34 @@ func checkCmd() *cli.Command {
 	return &cli.Command{
 		Name:  "check",
 		Usage: "Print the latest available release without installing",
-		Flags: []cli.Flag{repoFlag()},
+		Flags: []cli.Flag{
+			repoFlag(),
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "Emit a single JSON object suitable for machine consumption (used by the desktop GUI)",
+			},
+		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			c := upd.New(cmd.String("repo"))
 			r, err := c.Latest(ctx)
 			if err != nil {
 				return err
+			}
+			if cmd.Bool("json") {
+				out := struct {
+					Current         string `json:"current"`
+					Latest          string `json:"latest"`
+					UpdateAvailable bool   `json:"update_available"`
+					URL             string `json:"url"`
+					PublishedAt     string `json:"published_at"`
+				}{
+					Current:         buildinfo.Version,
+					Latest:          r.TagName,
+					UpdateAvailable: isNewer(r.TagName, buildinfo.Version),
+					URL:             r.HTMLURL,
+					PublishedAt:     r.PublishedAt.UTC().Format("2006-01-02"),
+				}
+				return json.NewEncoder(os.Stdout).Encode(out)
 			}
 			fmt.Printf("Latest release : %s\n", r.TagName)
 			fmt.Printf("Published      : %s\n", r.PublishedAt.UTC().Format("2006-01-02"))

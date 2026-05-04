@@ -1,0 +1,36 @@
+[package]
+name = "veil-desktop"
+version = "0.0.1"
+description = "Desktop client for Veil VPN."
+authors = ["Veil VPN Project Contributors"]
+license = "Apache-2.0"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "veil_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-store = "2"
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+
+# The desktop client links against libveil through the safe Rust
+# wrapper that lives next door in the same monorepo.
+veil = { path = "../../../sdks/veil-rs" }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+strip = true
+opt-level = "z"

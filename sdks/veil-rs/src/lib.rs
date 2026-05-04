@@ -17,7 +17,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 mod ffi;
@@ -97,7 +97,7 @@ impl EventType {
 }
 
 /// Parsed event payload delivered to user callbacks.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Event {
     #[serde(rename = "type", default)]
     pub kind: i32,
@@ -121,7 +121,7 @@ impl Event {
 }
 
 /// Snapshot of a running Veil instance's metrics.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Metrics {
     pub running: bool,
     #[serde(default)]
@@ -131,7 +131,7 @@ pub struct Metrics {
 }
 
 /// libveil version metadata.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Version {
     pub version: String,
     pub commit: String,

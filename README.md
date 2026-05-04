@@ -105,9 +105,29 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       and a `veil://` share-link URI scheme so client configs can be
       distributed as a single one-line string (printed by
       `veil user show-config`, accepted by `veil connect --link`).
-- [ ] **Phase 4.5** — Desktop client (Tauri), mobile clients
-      (React Native / NetworkExtension / VpnService), Node bindings
-      via NAPI.
+- [x] **Phase 4.5 (desktop client scaffold)** — `clients/desktop/`
+      Tauri 2 app linking the safe `veil-rs` SDK; `veil_start` /
+      `veil_stop` / `veil_metrics_json` Tauri commands drive an
+      in-process Veil session and forward every runtime event to
+      the JS frontend via the `"veil-event"` channel. Status panel
+      with status dot, transport label, byte counters, last-event
+      line, and a paste-in config text-area persisting through
+      `localStorage`. The libveil shared library ships next to the
+      binary (built from `core/pkg/cgo`).
+- [x] **Phase 4.7 (desktop polish)** — system tray with
+      Connect/Disconnect/Show/Quit menu and click-to-restore;
+      close-to-tray (window hide instead of process exit); OS
+      notifications on connect/error/transport-switch via
+      `tauri-plugin-notification`; launch-at-login toggle via
+      `tauri-plugin-autostart` (LSSharedFileList / xdg autostart /
+      Windows Run key); profile manager (multi-config dropdown with
+      add/delete/save) plus a settings panel (autostart, mimicry,
+      decoy, notifications), persisted through `tauri-plugin-store`;
+      in-app update check + apply that delegates to the bundled
+      `veil update` CLI (new `--json` flag on `veil update check`).
+- [ ] **Phase 4.6** — Mobile clients (React Native +
+      NetworkExtension on iOS, VpnService on Android) and Node
+      NAPI bindings.
 - [x] **Phase 5 (hardening half)** — statistical mimicry profiles
       (browse / video / messaging / search) wired into the data path
       via packet padding + inter-arrival jitter; multi-listen per
@@ -150,9 +170,9 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       Keep a Changelog 1.1 format covering every shipped phase.
       `docs/RELEASING.md` operator process, `docs/LAUNCH_CHECKLIST.md`
       pre-GA verification checklist.
-- [ ] **Phase 6.5** — distribution channels: Homebrew tap, Scoop
-      bucket, signed Docker images on push to ghcr.io. External
-      audit kickoff (depends on funding).
+- [ ] **Phase 6.6** — external security audit kickoff (depends on
+      funding); first tagged release end-to-end through the full
+      release pipeline.
 
 APIs, configuration formats, and the wire protocol are unstable and will
 change without notice until the v1.0 release.
