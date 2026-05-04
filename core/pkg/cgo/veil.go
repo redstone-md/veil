@@ -74,6 +74,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/client"
 	"github.com/redstone-md/veil/core/internal/config"
 	"github.com/redstone-md/veil/core/internal/mobile"
+	"github.com/redstone-md/veil/core/internal/sharelink"
 )
 
 // instance is the runtime side of one VeilHandle.
@@ -131,11 +132,21 @@ func drop(h uint64) {
 	regMu.Unlock()
 }
 
-// loadConfig accepts either a JSON or YAML config payload. We try
-// JSON first because the share-link / SDK paths emit JSON; YAML is
-// for parity with the on-disk config format.
+// loadConfig accepts a JSON, YAML, or veil:// share-link payload.
+// Auto-detect: leading "veil://" → share-link decode; leading '{' →
+// JSON; otherwise YAML. The share-link branch matches the CLI's
+// `connect --link` behaviour so SDK callers (desktop / mobile / Node /
+// Python / Rust) can hand the same one-line string straight to
+// veil_create without an extra decode step.
 func loadConfig(payload string) (*config.ClientConfig, error) {
 	trimmed := []byte(payload)
+	if len(trimmed) >= 7 && string(trimmed[:7]) == "veil://" {
+		c, err := sharelink.Decode(string(trimmed))
+		if err != nil {
+			return nil, err
+		}
+		return c, c.Validate()
+	}
 	if len(trimmed) > 0 && trimmed[0] == '{' {
 		var c config.ClientConfig
 		if err := json.Unmarshal(trimmed, &c); err == nil {
