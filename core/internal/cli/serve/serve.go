@@ -19,9 +19,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/redstone-md/veil/core/internal/acme"
 	"github.com/redstone-md/veil/core/internal/auth"
 	"github.com/redstone-md/veil/core/internal/config"
 	"github.com/redstone-md/veil/core/internal/crypto"
@@ -76,9 +78,14 @@ func run(ctx context.Context, cfgPath string) error {
 		defer store.Close()
 	}
 
+	acmeMgr, err := buildACME(cfg)
+	if err != nil {
+		return err
+	}
+
 	fanIn := transport.NewFanIn(slog.Default())
 	for i, t := range cfg.Transports {
-		ln, err := buildListener(t, staticKP.Public)
+		ln, err := buildListener(t, staticKP.Public, acmeMgr)
 		if err != nil {
 			return fmt.Errorf("transport[%d] %s: %w", i, t.Type, err)
 		}
@@ -102,7 +109,7 @@ func run(ctx context.Context, cfgPath string) error {
 			slog.Error("accept failed", "err", err)
 			return err
 		}
-		go handleConn(ctx, conn, *staticKP, authn)
+		go handleConn(ctx, conn, *staticKP, authn, store)
 	}
 }
 
@@ -127,12 +134,41 @@ func buildAuthenticator(cfg *config.ServerConfig) (auth.Authenticator, *users.St
 	return nil, nil, errors.New("no authenticator configured")
 }
 
-func buildListener(t config.ServerTransport, serverStaticPub []byte) (transport.Listener, error) {
+func buildACME(cfg *config.ServerConfig) (*acme.Manager, error) {
+	if !cfg.ACME.Enabled() {
+		return nil, nil
+	}
+	var domains []string
+	seen := map[string]bool{}
+	for _, t := range cfg.Transports {
+		if t.Domain != "" && !seen[t.Domain] {
+			domains = append(domains, t.Domain)
+			seen[t.Domain] = true
+		}
+	}
+	if len(domains) == 0 {
+		slog.Info("acme configured but no transport declares a domain; skipping")
+		return nil, nil
+	}
+	cacheDir := cfg.ACME.CacheDir
+	if cacheDir == "" {
+		cacheDir = "/var/lib/veil/acme"
+	}
+	return acme.NewManager(acme.Config{
+		CacheDir: cacheDir,
+		Email:    cfg.ACME.Email,
+		Domains:  domains,
+		Staging:  cfg.ACME.Staging,
+		Logger:   slog.Default(),
+	})
+}
+
+func buildListener(t config.ServerTransport, serverStaticPub []byte, acmeMgr *acme.Manager) (transport.Listener, error) {
 	switch t.Type {
 	case config.TransportQUIC:
 		return quictr.Listen(t.Listen)
 	case config.TransportWSS:
-		tlsCfg, err := buildServerTLS(t)
+		tlsCfg, err := buildServerTLS(t, acmeMgr)
 		if err != nil {
 			return nil, err
 		}
@@ -158,9 +194,13 @@ func buildListener(t config.ServerTransport, serverStaticPub []byte) (transport.
 	}
 }
 
-func buildServerTLS(t config.ServerTransport) (*tls.Config, error) {
+func buildServerTLS(t config.ServerTransport, acmeMgr *acme.Manager) (*tls.Config, error) {
 	if t.CertFile != "" && t.KeyFile != "" {
 		return wsstr.LoadTLSConfig(t.CertFile, t.KeyFile)
+	}
+	if acmeMgr != nil && t.Domain != "" {
+		slog.Info("acme cert in use", "transport", t.Type, "domain", t.Domain)
+		return acmeMgr.TLSConfig(), nil
 	}
 	host, _, err := net.SplitHostPort(t.Listen)
 	if err != nil {
@@ -171,13 +211,13 @@ func buildServerTLS(t config.ServerTransport) (*tls.Config, error) {
 	}
 	slog.Warn("self-signed TLS cert in use",
 		"transport", t.Type,
-		"hint", "set cert_file and key_file for production",
+		"hint", "set cert_file/key_file or configure acme with a domain for production",
 		"cn", host,
 	)
 	return wsstr.SelfSignedTLSConfig(host)
 }
 
-func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypair, authn auth.Authenticator) {
+func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypair, authn auth.Authenticator, store *users.Store) {
 	defer conn.Close()
 	logger := slog.With("peer", conn.RemoteAddr().String())
 
@@ -199,6 +239,18 @@ func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypai
 	}
 	logger.Info("client authenticated")
 
+	var acc *users.Accountant
+	if store != nil && res.UserID != "" {
+		u, err := store.GetUser(ctx, res.UserID)
+		if err == nil {
+			acc = users.NewAccountant(store, u, logger)
+			if acc.QuotaExceeded() {
+				logger.Warn("session refused: user already over quota")
+				return
+			}
+		}
+	}
+
 	secure := session.NewSecureChannel(conn, established)
 	sess := session.New(secure, session.Options{Role: session.RoleServer, Logger: logger})
 
@@ -208,7 +260,10 @@ func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypai
 	runErr := make(chan error, 1)
 	go func() { runErr <- sess.Run() }()
 
-	fwd := forward.NewServer(sess, logger, nil)
+	fwd := forward.NewServer(sess, forward.Options{
+		Logger:     logger,
+		Accountant: accountantOrNil(acc),
+	})
 	fwdErr := make(chan error, 1)
 	go func() { fwdErr <- fwd.Run(connCtx) }()
 
@@ -226,6 +281,21 @@ func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypai
 	case <-ctx.Done():
 	}
 	_ = sess.Close()
+	if acc != nil {
+		flushCtx, fcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		acc.FlushFinal(flushCtx)
+		fcancel()
+	}
+}
+
+// accountantOrNil returns a forward.Accountant only when the
+// concrete *users.Accountant is non-nil. Direct passing trips Go's
+// typed-nil rule.
+func accountantOrNil(a *users.Accountant) forward.Accountant {
+	if a == nil {
+		return nil
+	}
+	return a
 }
 
 // _ keeps the os import used even if the file is later trimmed.

@@ -50,7 +50,33 @@ type ServerTransport struct {
 	// TargetAddr is the host:port Reality splices unauthorised
 	// (probe) traffic to. Defaults to "<TargetSNI>:443" when empty.
 	TargetAddr string `yaml:"target_addr"`
+
+	// Domain is the public host name this transport is reachable
+	// at. When set together with a server-level ACME config, the
+	// transport's TLS certificate is provisioned automatically via
+	// Let's Encrypt instead of falling back to a self-signed cert.
+	Domain string `yaml:"domain"`
 }
+
+// ACMEConfig drives the embedded Let's Encrypt client.
+type ACMEConfig struct {
+	// Email is the contact address registered with the ACME CA.
+	// Required to activate ACME.
+	Email string `yaml:"email"`
+
+	// CacheDir is the directory certmagic writes private keys
+	// and issued certs to. Defaults to "/var/lib/veil/acme" when
+	// empty.
+	CacheDir string `yaml:"cache_dir"`
+
+	// Staging routes ACME requests to Let's Encrypt's staging
+	// endpoint instead of production. Use during development.
+	Staging bool `yaml:"staging"`
+}
+
+// Enabled reports whether ACME is sufficiently configured to
+// attempt certificate provisioning.
+func (c *ACMEConfig) Enabled() bool { return c.Email != "" }
 
 // ServerConfig describes a server deployment.
 type ServerConfig struct {
@@ -58,6 +84,11 @@ type ServerConfig struct {
 	// bind. A typical Phase 2 deployment exposes both QUIC and WSS
 	// so clients can fall back if UDP is filtered.
 	Transports []ServerTransport `yaml:"transports"`
+
+	// ACME, when populated, enables Let's Encrypt certificate
+	// auto-provisioning for any TLS-terminating transport that
+	// declares a domain but no explicit cert/key file pair.
+	ACME ACMEConfig `yaml:"acme"`
 
 	// StaticKeyPath is the filesystem path holding the server's
 	// long-term Noise XK static keypair. The file is created on
