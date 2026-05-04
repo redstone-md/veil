@@ -64,18 +64,24 @@ ios/
 
 ## Status
 
-Phase 4.6 — file layout, PacketTunnelProvider, VeilSession, the
-host-app VeilBridge module, and the libveil ingest / emit-callback
-plumbing are all in place. The packetFlow ↔ libveil pump runs
-through `veil_ne_ingest_packet` (Swift → Go) and the
-`@_cdecl("veil_emit_trampoline")` callback (Go → Swift); the Go side
-is in `core/pkg/cgo/mobile.go` + `core/internal/mobile/tun_pipe.go`.
+Phase 4.6 — end-to-end functional. PacketTunnelProvider, VeilSession,
+the host-app VeilBridge module, and the full tun2socks pipe are all
+wired:
 
-The remaining work is the actual tun2socks engine inside
-`internal/mobile`: the file layout already models the two ingestion
-shapes (FDPipe / CallbackPipe) and the lifetime, but packets queued
-through `Ingest()` are dropped pending a gVisor or
-`xjasonlyu/tun2socks` integration. Until that lands, the SOCKS5
-listener inside the session is reachable from inside the tunnel
-(handy for tests) but full system-traffic interception is not yet
-exercised end-to-end.
+  * Inbound (OS → libveil): `packetFlow.readPackets` →
+    `veil_ne_ingest_packet` → `CallbackPipe.Ingest` →
+    `channel.Endpoint.InjectInbound` → gVisor netstack →
+    `tunnel.T().HandleTCP/UDP` → SOCKS5 dial against the per-session
+    listener.
+
+  * Outbound (libveil → OS): SOCKS5 reply → tunnel processor →
+    netstack → `channel.Endpoint.ReadContext` →
+    `@_cdecl("veil_emit_trampoline")` → `packetFlow.writePackets`.
+
+The CallbackPipe builds its own gVisor stack via
+`xjasonlyu/tun2socks/v2/core.CreateStack` with our channel.Endpoint
+as the LinkEndpoint, then plumbs `tunnel.T()` and the SOCKS5 dialer
+in for transport-layer forwarding. tun2socks's internal state is
+process-wide, so a `pipeActive` mutex prevents the iOS path and the
+Android FDPipe from coexisting; mobile clients only ever start one
+tunnel per process so this is not a usability limitation.

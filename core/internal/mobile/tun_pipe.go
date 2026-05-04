@@ -8,41 +8,54 @@
 // mobile platforms expose tunnels very differently:
 //
 //   - FDPipe — Android. The OS hands us a TUN file descriptor. We
-//     drive xjasonlyu/tun2socks/v2/engine against the fd, which
-//     converts ingressed IP packets into TCP/UDP connections it
-//     dials through the per-session SOCKS5 listener.
+//     drive xjasonlyu/tun2socks/v2/engine against the fd; the
+//     engine internally builds a gVisor netstack pinned to that fd
+//     and dials each TCP/UDP flow it lifts off the TUN through the
+//     per-session SOCKS5 listener.
+//
 //   - CallbackPipe — iOS. NEPacketTunnelProvider exposes
 //     packetFlow.readPackets / writePackets callbacks rather than a
-//     fd. tun2socks's engine cannot consume that shape directly;
-//     wiring this case up needs a custom gVisor LinkEndpoint and is
-//     deferred to a follow-up commit. For now CallbackPipe is a
-//     bounded queue that drops packets — the SOCKS5 listener is
-//     still reachable from inside the tunnel for apps that opt in
-//     explicitly.
+//     fd. We set up a parallel netstack with a custom
+//     channel.Endpoint as the LinkEndpoint: Ingest() injects packets
+//     read off packetFlow into the netstack, and an outbound
+//     goroutine pulls packets the netstack has produced and forwards
+//     them to the registered emit callback (which the Swift side
+//     plugs into packetFlow.writePackets).
 //
-// Engine constraints: xjasonlyu/tun2socks's engine package keeps
-// state in a process-wide singleton. We mirror that with a package-
-// level mutex so two FDPipes can't fight over it. The mobile clients
-// only ever run one tunnel per process, so this is not a usability
-// limitation.
+// Engine constraints: tun2socks's engine, tunnel and proxy packages
+// keep state in a process-wide singleton (`tunnel.T()` is global,
+// `engine._defaultStack` is global). FDPipe goes through the engine
+// path; CallbackPipe builds its own stack but still has to share the
+// global `tunnel.T()` dialer hookup. We mirror that with a package-
+// level mutex so two pipes cannot coexist. The mobile clients only
+// ever run one tunnel per process, so the constraint is not a
+// usability limitation.
 
 package mobile
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
 
+	"github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
+	"github.com/xjasonlyu/tun2socks/v2/proxy"
+	"github.com/xjasonlyu/tun2socks/v2/tunnel"
+	"gvisor.dev/gvisor/pkg/buffer"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/link/channel"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 
 	"github.com/redstone-md/veil/core/internal/client"
 )
 
-// engineActive guards the tun2socks engine singleton. Only one
-// FDPipe at a time may hold it.
-var engineActive atomic.Bool
+// pipeActive guards the per-process tun2socks state. Only one pipe
+// (FDPipe or CallbackPipe) may run at a time.
+var pipeActive atomic.Bool
 
 // FDPipe owns a TUN file descriptor and drives the tun2socks engine
 // between it and the Veil session's SOCKS5 listener.
@@ -59,7 +72,8 @@ type FDPipe struct {
 //
 // The pipe dials the SOCKS5 listener at cli.SOCKSAddr() for every
 // new TCP / UDP flow tun2socks lifts off the TUN. Returns an error
-// if another FDPipe is already running in this process.
+// if another pipe (FD or callback) is already running in this
+// process.
 func AttachFD(fd int, cli *client.Client, logger *slog.Logger) (*FDPipe, error) {
 	if fd < 0 {
 		return nil, errors.New("mobile: invalid tun fd")
@@ -70,8 +84,8 @@ func AttachFD(fd int, cli *client.Client, logger *slog.Logger) (*FDPipe, error) 
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if !engineActive.CompareAndSwap(false, true) {
-		return nil, errors.New("mobile: tun2socks engine already running in this process")
+	if !pipeActive.CompareAndSwap(false, true) {
+		return nil, errors.New("mobile: another tun2socks pipe is already running in this process")
 	}
 
 	socks := cli.SOCKSAddr()
@@ -86,11 +100,10 @@ func AttachFD(fd int, cli *client.Client, logger *slog.Logger) (*FDPipe, error) 
 	})
 	// engine.Start swallows errors via log.Fatalf; the Key fields
 	// above are well-formed (constant scheme strings, integer fd,
-	// known LogLevel) so the failure modes we'd hit here are
-	// runtime-only (e.g. EBADF on the supplied fd) — those surface
-	// as the engine logging through log.Fatalf, which terminates
-	// the process. That matches Android's expectation that the
-	// VpnService is killed if the TUN is unusable.
+	// known LogLevel) so the failure modes that remain are runtime-
+	// only (e.g. EBADF on the supplied fd) — those terminate the
+	// VpnService process, which matches Android's expectation that
+	// an unusable TUN tears the service down.
 	engine.Start()
 
 	return &FDPipe{fd: fd, cli: cli, logger: logger}, nil
@@ -104,31 +117,40 @@ func (p *FDPipe) Close() {
 	}
 	p.logger.Info("mobile: stopping tun2socks engine")
 	engine.Stop()
-	engineActive.Store(false)
+	pipeActive.Store(false)
 	// engine.Stop closes the device which already owns the fd; we
 	// must not double-close it here.
 }
 
-// CallbackPipe carries the iOS-side callback shape: an Ingest method
-// the host calls per inbound packet, plus an emit-callback the pipe
-// invokes per outbound packet.
+// CallbackPipe drives an iOS-side tun2socks pipe whose underlying
+// transport is a pair of Swift callbacks (packetFlow.readPackets ↔
+// packetFlow.writePackets) rather than a fd.
 //
-// At Phase 4.6 v0 the callback model is a bounded queue with no
-// netstack underneath; see the package comment for the deferred
-// gVisor LinkEndpoint integration.
+// Ingest() injects each IP packet read from packetFlow into the
+// gVisor netstack; tun2socks's tunnel processor lifts TCP / UDP
+// flows off the netstack and dials them through the SOCKS5 listener.
+// Each outbound packet the netstack produces is pulled by an
+// internal goroutine and pushed to the emit callback the Swift side
+// registered via veil_ne_start.
 type CallbackPipe struct {
 	emit   func([]byte, int)
 	cli    *client.Client
 	logger *slog.Logger
 
-	closed atomic.Bool
+	endpoint *channel.Endpoint
+	stk      *stack.Stack
 
-	mu      sync.Mutex
-	pending [][]byte
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	closed atomic.Bool
+	wg     sync.WaitGroup
 }
 
 // AttachCallback prepares a callback-driven pipe. The supplied emit
-// function may be nil; if so the pipe drops outbound packets.
+// function may be nil; if so the pipe drops outbound packets but
+// still terminates inbound flows through SOCKS5 (handy for tests
+// that drive only the ingress side).
 func AttachCallback(emit func([]byte, int), cli *client.Client, logger *slog.Logger) (*CallbackPipe, error) {
 	if cli == nil {
 		return nil, errors.New("mobile: nil client")
@@ -136,35 +158,115 @@ func AttachCallback(emit func([]byte, int), cli *client.Client, logger *slog.Log
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Warn("mobile: CallbackPipe is a queue-only stub; iOS NetworkExtension end-to-end forwarding is pending a custom gVisor LinkEndpoint")
-	return &CallbackPipe{emit: emit, cli: cli, logger: logger}, nil
+	if !pipeActive.CompareAndSwap(false, true) {
+		return nil, errors.New("mobile: another tun2socks pipe is already running in this process")
+	}
+
+	socks := cli.SOCKSAddr()
+	logger.Info("mobile: starting callback-driven tun2socks pipe",
+		"socks5", socks)
+
+	socksProxy, err := proxy.NewSocks5(socks, "", "")
+	if err != nil {
+		pipeActive.Store(false)
+		return nil, fmt.Errorf("mobile: socks5 proxy: %w", err)
+	}
+	tunnel.T().SetDialer(socksProxy)
+	tunnel.T().ProcessAsync()
+
+	const queueLen = 512
+	const mtu = 1500
+	endpoint := channel.New(queueLen, mtu, "")
+
+	stk, err := core.CreateStack(&core.Config{
+		LinkEndpoint:     endpoint,
+		TransportHandler: tunnel.T(),
+	})
+	if err != nil {
+		endpoint.Close()
+		pipeActive.Store(false)
+		return nil, fmt.Errorf("mobile: create stack: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &CallbackPipe{
+		emit:     emit,
+		cli:      cli,
+		logger:   logger,
+		endpoint: endpoint,
+		stk:      stk,
+		ctx:      ctx,
+		cancel:   cancel,
+	}
+	p.wg.Add(1)
+	go p.outboundLoop()
+	return p, nil
 }
 
-// Ingest pushes one IP packet from the OS into the pipe. family is 4
-// for AF_INET, 6 for AF_INET6. Packets are queued for processing by
-// the (still-pending) gVisor LinkEndpoint integration; until that
-// lands they are dropped after a small bound to avoid unbounded
-// memory growth.
+// Ingest pushes one IP packet into the netstack. family is 4 for
+// AF_INET, 6 for AF_INET6. Packets that don't decode as a known IP
+// version are silently dropped.
 func (p *CallbackPipe) Ingest(packet []byte, family int) {
-	if p.closed.Load() {
+	if p.closed.Load() || len(packet) == 0 {
 		return
 	}
-	const queueBound = 256
-	p.mu.Lock()
-	if len(p.pending) >= queueBound {
-		p.pending = p.pending[1:] // drop oldest
+	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(packet),
+	})
+	defer pkt.DecRef()
+
+	// Trust the Swift side's family hint when the packet's first
+	// nibble is ambiguous (zero), otherwise pick from the IP header
+	// which is authoritative.
+	switch header.IPVersion(packet) {
+	case header.IPv4Version:
+		p.endpoint.InjectInbound(header.IPv4ProtocolNumber, pkt)
+	case header.IPv6Version:
+		p.endpoint.InjectInbound(header.IPv6ProtocolNumber, pkt)
+	default:
+		if family == 6 {
+			p.endpoint.InjectInbound(header.IPv6ProtocolNumber, pkt)
+		} else {
+			p.endpoint.InjectInbound(header.IPv4ProtocolNumber, pkt)
+		}
 	}
-	p.pending = append(p.pending, packet)
-	p.mu.Unlock()
-	_ = family // forwarded once the LinkEndpoint lands
 }
 
-// Close stops the pipe.
+// outboundLoop drains packets the netstack has produced (responses
+// to ingressed flows, RSTs etc.) and pushes them to the emit
+// callback. The loop exits when the pipe is closed.
+func (p *CallbackPipe) outboundLoop() {
+	defer p.wg.Done()
+	for {
+		pkt := p.endpoint.ReadContext(p.ctx)
+		if pkt == nil {
+			return // ctx cancelled
+		}
+		if p.emit != nil {
+			buf := pkt.ToBuffer()
+			data := buf.Flatten()
+			buf.Release()
+			family := 4
+			if len(data) > 0 && header.IPVersion(data) == header.IPv6Version {
+				family = 6
+			}
+			p.emit(data, family)
+		}
+		pkt.DecRef()
+	}
+}
+
+// Close tears the pipe down: cancel the outbound loop, close the
+// stack, release the global pipe slot.
 func (p *CallbackPipe) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
-	p.mu.Lock()
-	p.pending = nil
-	p.mu.Unlock()
+	p.logger.Info("mobile: stopping callback-driven tun2socks pipe")
+	p.cancel()
+	p.endpoint.Close()
+	p.stk.Close()
+	p.stk.Wait()
+	p.wg.Wait()
+	pipeActive.Store(false)
 }
