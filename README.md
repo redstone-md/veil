@@ -33,8 +33,14 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       origin so probes see a real, third-party TLS response (real cert, real
       content). Authenticated clients get a forged TLS cert whose SAN names
       the target SNI, then run a Noise XK + VWP/1 session inside.
-- [ ] **Phase 3** — Self-host UX: Tauri installer, embedded admin UI, ACME,
-      user management.
+- [x] **Phase 3** — Self-host UX (CLI half): SQLite-backed user store with
+      quotas / expiry / status flags, `veil user` CRUD subcommands, an
+      embedded admin HTTP API protected by HTTP Basic auth backed by an
+      `admin_users` table, a minimal HTML dashboard served from the same
+      binary, and an [INSTALL guide](docs/INSTALL.md) walking through
+      end-to-end bring-up.
+- [ ] **Phase 3.5** — Self-host UX (GUI half): Tauri installer, ACME for
+      WSS / Reality production certs, browser-grade Web UI.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
 
 APIs, configuration formats, and the wire protocol are unstable and will
