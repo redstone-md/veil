@@ -132,22 +132,48 @@ jobs:
           # below exports it as an env var on the build step.
           echo "TAURI_WIN_CERT_PATH=/tmp/cert.pfx" >> "$GITHUB_ENV"
 
-      - name: tauri build
+      # Build with signing only when the relevant secret IS set.
+      # An empty APPLE_SIGNING_IDENTITY env tells tauri-bundler to
+      # call codesign with an empty argument, which fails with
+      # "specified item could not be found in the keychain". The
+      # same logic applies to the Windows cert path. Splitting the
+      # build into two steps gated by the secret presence keeps
+      # the unsigned default path clean.
+      - name: tauri build (signed, macOS)
+        if: runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY != ''
         working-directory: installer
         env:
-          # macOS signing identity: empty == unsigned build.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Windows: tauri-bundler reads these for signtool.exe.
-          TAURI_WIN_CERT_PATH: ${{ env.TAURI_WIN_CERT_PATH }}
-          TAURI_WIN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          # Tauri auto-update signing (separate from codesigning):
-          # if a private key is configured the build emits
-          # `*.sig` files alongside each artefact for tauri-updater.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri:build -- --ci
+
+      - name: tauri build (signed, Windows)
+        if: runner.os == 'Windows' && env.TAURI_WIN_CERT_PATH != ''
+        working-directory: installer
+        env:
+          TAURI_WIN_CERT_PATH: ${{ env.TAURI_WIN_CERT_PATH }}
+          TAURI_WIN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: npm run tauri:build -- --ci
+
+      - name: tauri build (unsigned)
+        if: |
+          (runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY == '') ||
+          (runner.os == 'Windows' && env.TAURI_WIN_CERT_PATH == '') ||
+          runner.os == 'Linux'
+        working-directory: installer
+        env:
+          # Tauri auto-update signing remains opt-in; if absent it
+          # is also a no-op.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
         run: npm run tauri:build -- --ci
 
       - uses: actions/upload-artifact@v4
