@@ -84,6 +84,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
+          check-latest: true
           cache: true
           cache-dependency-path: core/go.sum
       - name: build
@@ -130,6 +131,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
+          check-latest: true
           cache: true
           cache-dependency-path: core/go.sum
       - name: install MSYS2 mingw (Windows only)

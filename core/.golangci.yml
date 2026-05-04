@@ -1,48 +1,52 @@
-# golangci-lint configuration for the Veil core module.
-# Kept conservative initially; will tighten as the codebase matures.
+# golangci-lint v2 configuration for the Veil core module.
+# Migrated from v1 alongside the bump to a Go 1.25-compatible
+# golangci-lint release.
+version: "2"
+
 run:
   timeout: 5m
   modules-download-mode: readonly
 
 linters:
-  disable-all: true
+  default: none
   enable:
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
-    - goimports
     - misspell
     - revive
     - bodyclose
     - gosec
     - unconvert
     - gocritic
-
-linters-settings:
-  goimports:
-    local-prefixes: github.com/redstone-md/veil
-  misspell:
-    locale: US
-  revive:
+  settings:
+    misspell:
+      locale: US
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
+        - name: var-naming
+        - name: indent-error-flow
+        - name: error-return
+        - name: error-strings
+        - name: increment-decrement
+  exclusions:
     rules:
-      - name: exported
-        arguments:
-          - disableStutteringCheck
-      - name: package-comments
-      - name: var-naming
-      - name: indent-error-flow
-      - name: error-return
-      - name: error-strings
-      - name: increment-decrement
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
 
-issues:
-  exclude-dirs:
-    - vendor
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gosec
-        - errcheck
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/redstone-md/veil

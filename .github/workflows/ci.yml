@@ -18,6 +18,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
+          check-latest: true
           cache: true
           cache-dependency-path: core/go.sum
       - name: go vet
@@ -36,7 +37,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.61.0
+          version: v2.0.2
           working-directory: core
           args: --timeout=5m
 
@@ -52,6 +53,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
+          check-latest: true
           cache: true
           cache-dependency-path: core/go.sum
       - name: go test
@@ -87,6 +89,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
+          check-latest: true
           cache: true
           cache-dependency-path: core/go.sum
       - name: build
@@ -125,6 +128,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
+          check-latest: true
           cache: true
           cache-dependency-path: core/go.sum
       - name: install MSYS2 mingw (Windows only)
@@ -158,6 +162,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: core/go.mod
+          check-latest: true
           cache: true
           cache-dependency-path: core/go.sum
       - name: install govulncheck
