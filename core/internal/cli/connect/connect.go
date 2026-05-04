@@ -27,6 +27,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/session"
 	"github.com/redstone-md/veil/core/internal/transport"
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
+	"github.com/redstone-md/veil/core/internal/transport/realitytr"
 	"github.com/redstone-md/veil/core/internal/transport/wsstr"
 )
 
@@ -75,7 +76,7 @@ func run(ctx context.Context, cfgPath string) error {
 
 	fb := transport.NewFallback(slog.Default())
 	for i, s := range cfg.Servers {
-		d, err := buildDialer(s)
+		d, err := buildDialer(s, serverPub)
 		if err != nil {
 			return fmt.Errorf("client.servers[%d]: %w", i, err)
 		}
@@ -159,7 +160,7 @@ func startDecoyEngine(ctx context.Context, dc config.DecoyConfig, userKey []byte
 	}()
 }
 
-func buildDialer(s config.ClientServer) (transport.Dialer, error) {
+func buildDialer(s config.ClientServer, serverStaticPub []byte) (transport.Dialer, error) {
 	switch s.Type {
 	case config.TransportQUIC:
 		return quictr.NewDialer(), nil
@@ -185,7 +186,14 @@ func buildDialer(s config.ClientServer) (transport.Dialer, error) {
 		}
 		return wsstr.NewDialer(dc), nil
 	case config.TransportReality:
-		return nil, fmt.Errorf("reality transport not yet implemented; see docs/architecture/ADR-0002")
+		secret, err := realitytr.DeriveAuthSecret(serverStaticPub)
+		if err != nil {
+			return nil, err
+		}
+		return realitytr.NewDialer(realitytr.DialConfig{
+			Secret: secret,
+			SNI:    s.SNI,
+		}), nil
 	default:
 		return nil, fmt.Errorf("unknown transport type %q", s.Type)
 	}

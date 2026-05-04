@@ -28,6 +28,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/session"
 	"github.com/redstone-md/veil/core/internal/transport"
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
+	"github.com/redstone-md/veil/core/internal/transport/realitytr"
 	"github.com/redstone-md/veil/core/internal/transport/wsstr"
 )
 
@@ -73,7 +74,7 @@ func run(ctx context.Context, cfgPath string) error {
 
 	fanIn := transport.NewFanIn(slog.Default())
 	for i, t := range cfg.Transports {
-		ln, err := buildListener(t)
+		ln, err := buildListener(t, staticKP.Public)
 		if err != nil {
 			return fmt.Errorf("transport[%d] %s: %w", i, t.Type, err)
 		}
@@ -101,7 +102,7 @@ func run(ctx context.Context, cfgPath string) error {
 	}
 }
 
-func buildListener(t config.ServerTransport) (transport.Listener, error) {
+func buildListener(t config.ServerTransport, serverStaticPub []byte) (transport.Listener, error) {
 	switch t.Type {
 	case config.TransportQUIC:
 		return quictr.Listen(t.Listen)
@@ -116,7 +117,17 @@ func buildListener(t config.ServerTransport) (transport.Listener, error) {
 			TLS:  tlsCfg,
 		})
 	case config.TransportReality:
-		return nil, fmt.Errorf("reality transport not yet implemented; see docs/architecture/ADR-0002")
+		secret, err := realitytr.DeriveAuthSecret(serverStaticPub)
+		if err != nil {
+			return nil, err
+		}
+		return realitytr.Listen(realitytr.ListenConfig{
+			Addr:       t.Listen,
+			Secret:     secret,
+			TargetSNI:  t.TargetSNI,
+			TargetAddr: t.TargetAddr,
+			Logger:     slog.Default(),
+		})
 	default:
 		return nil, fmt.Errorf("unknown transport type %q", t.Type)
 	}

@@ -42,6 +42,14 @@ type ServerTransport struct {
 	// Path is the HTTP path the WSS adapter accepts upgrades on.
 	// Defaults to "/" when empty.
 	Path string `yaml:"path"`
+
+	// TargetSNI is the host name the Reality adapter impersonates.
+	// Required for type=reality. Both peers MUST agree.
+	TargetSNI string `yaml:"target_sni"`
+
+	// TargetAddr is the host:port Reality splices unauthorised
+	// (probe) traffic to. Defaults to "<TargetSNI>:443" when empty.
+	TargetAddr string `yaml:"target_addr"`
 }
 
 // ServerConfig describes a server deployment.
