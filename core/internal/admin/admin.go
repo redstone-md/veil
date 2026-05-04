@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/subtle"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"github.com/redstone-md/veil/core/internal/buildinfo"
+	"github.com/redstone-md/veil/core/internal/crypto"
 	"github.com/redstone-md/veil/core/internal/users"
 )
 
@@ -194,9 +196,25 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		if body.Name == "" || body.PubkeyB64 == "" {
-			http.Error(w, "name and pubkey_b64 are required", http.StatusBadRequest)
+		if body.Name == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
 			return
+		}
+		// When the caller does not bring its own keypair, generate
+		// one server-side and return the private half once in the
+		// response. Mirrors the CLI's `veil user add` (without
+		// --pubkey) so the GUI / installer can ship a one-shot
+		// share-link without forcing the operator to pre-generate
+		// keys on the client.
+		var generatedPriv []byte
+		if body.PubkeyB64 == "" {
+			kp, gerr := crypto.GenerateKeypair()
+			if gerr != nil {
+				http.Error(w, "key generation failed: "+gerr.Error(), http.StatusInternalServerError)
+				return
+			}
+			body.PubkeyB64 = base64.StdEncoding.EncodeToString(kp.Public)
+			generatedPriv = kp.Private
 		}
 		u, err := s.store.CreateUser(r.Context(), body.Name, body.PubkeyB64)
 		if err != nil {
@@ -207,7 +225,14 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusCreated, mapUser(u))
+		view := mapUser(u)
+		if generatedPriv != nil {
+			// One-shot return; the server keeps no copy. This is
+			// surfaced to the operator inside the admin GUI / API
+			// response only — never logged or persisted.
+			view.PrivkeyB64 = base64.StdEncoding.EncodeToString(generatedPriv)
+		}
+		writeJSON(w, http.StatusCreated, view)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -323,10 +348,16 @@ func writeJSON(w http.ResponseWriter, status int, body interface{}) {
 }
 
 // userView is the JSON-marshalable representation of a user.
+//
+// PrivkeyB64 is populated only on the response from a server-generated
+// keypair (POST /api/users with empty pubkey_b64) — the server keeps
+// no copy after that single response. All other endpoints leave it
+// blank.
 type userView struct {
 	ID                    string `json:"id"`
 	Name                  string `json:"name"`
 	PubkeyB64             string `json:"pubkey_b64"`
+	PrivkeyB64            string `json:"privkey_b64,omitempty"`
 	CreatedAt             int64  `json:"created_at"`
 	ExpiresAt             *int64 `json:"expires_at,omitempty"`
 	QuotaBytesPerMonth    *int64 `json:"quota_bytes_per_month,omitempty"`
