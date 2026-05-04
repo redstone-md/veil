@@ -46,8 +46,19 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       expiry editors), and a Tauri installer **scaffold** with the
       Docker compose generator workflow wired up. SSH and edge
       installer paths land in the next milestone.
-- [ ] **Phase 3.6** — Tauri installer: SSH remote install + edge
-      OAuth flows; cross-platform release packaging.
+- [x] **Phase 3.6 (installer SSH workflow + real-world bring-up)** —
+      The Tauri installer's SSH workflow is now functional: connect,
+      upload the bundled `veil` binary, write `/etc/veil/server.yaml`
+      and a systemd unit, enable + start the service, tail the
+      logs back to the operator. Backed by `russh` (ring crypto
+      backend, no NASM dependency on Windows) wrapped in two
+      `#[tauri::command]` handlers (`ssh_probe`, `ssh_install`).
+      [docs/REAL_WORLD_VERIFICATION.md](docs/REAL_WORLD_VERIFICATION.md)
+      captures the first end-to-end run against a real Lithuania
+      VPS — three transports (Reality, WSS, QUIC) bound at once,
+      30-stream multiplex, throughput numbers vs direct, Reality
+      probe behaviour. Edge OAuth + cross-platform release packaging
+      split out as Phase 3.7.
 - [x] **Phase 4 (CLI/SDK half)** — Refactor of the connect path into
       a reusable `internal/client.Client`, a CGO-built libveil shared
       library exposing a stable C ABI (`core/pkg/cgo` +
