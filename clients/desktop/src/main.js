@@ -1,12 +1,20 @@
-// Veil desktop client — Phase 4.7.
+// Veil desktop client — consumer-grade VPN UI.
 //
-// Adds a profile manager, settings panel, and tray integration on top
-// of the Phase 4.5 connect/disconnect scaffold. State is persisted via
-// tauri-plugin-store so profiles + settings survive across launches.
+// Hero toggle button, server picker chip, stat strip, quick paste
+// for veil:// links, settings as a gear. The technical YAML editor
+// is folded into the active server's menu (Edit), and the diagnostic
+// log lives in a collapsed drawer at the bottom — out of the way for
+// the 95% of operations that are just connect/disconnect.
+//
+// State persists via tauri-plugin-store; tray menu, OS notifications,
+// autostart, and update flow live in the Rust host (lib.rs).
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Store } from "@tauri-apps/plugin-store";
+
+const appWindow = getCurrentWindow();
 
 const STORE_FILE = "veil.store.json";
 const KEY_PROFILES = "profiles";
@@ -22,19 +30,23 @@ const state = {
   bytesTx: 0,
   bytesRx: 0,
   message: "",
-  profiles: [],            // [{id, name, config}]
+  startedAt: 0,
+  uptimeTick: 0,
+  profiles: [],          // [{id, name, config}]
   activeId: null,
-  configEditor: "",        // current editor text (may be unsaved)
-  configCollapsed: true,
+  serverMenuOpen: false,
+  view: "main",          // main | settings | editor
+  editorBuffer: "",      // when view==='editor'
   settings: {
     autostart: false,
     mimicry: "",
     decoy: false,
     notifications: true,
   },
-  view: "main",            // main | settings
   log: [],
-  update: null,            // {current, latest, update_available, url}
+  update: null,
+  toast: null,           // { kind: 'info'|'error', text }
+  modal: null,           // { title, body, fields, onSubmit, submitLabel }
 };
 
 let store = null;
@@ -45,15 +57,16 @@ async function bootStore() {
   state.activeId = (await store.get(KEY_ACTIVE)) || null;
   const persistedSettings = await store.get(KEY_SETTINGS);
   if (persistedSettings) state.settings = { ...state.settings, ...persistedSettings };
-  if (state.activeId) {
-    const p = state.profiles.find((p) => p.id === state.activeId);
-    if (p) state.configEditor = p.config;
-  }
   try {
     state.settings.autostart = await invoke("get_autostart");
-  } catch (_) {
-    // backend can fail to query autostart in dev; keep persisted value
-  }
+  } catch (_) {}
+  setInterval(() => {
+    if (state.status === "connected") {
+      state.uptimeTick++;
+      const u = document.getElementById("uptime");
+      if (u) u.textContent = fmtUptime(elapsed());
+    }
+  }, 1000);
   render();
 }
 
@@ -65,156 +78,213 @@ async function persistSettings() {
   await store.set(KEY_SETTINGS, state.settings);
 }
 
+// --- main render ---
+
 function render() {
   root.innerHTML = "";
-  if (state.view === "settings") {
-    renderSettings();
-    return;
+  root.append(renderTitlebar());
+  const body = el("div", { class: "appbody" });
+  root.append(body);
+  switch (state.view) {
+    case "settings": renderSettings(body); break;
+    case "editor":   renderEditor(body); break;
+    default:         renderHome(body);
   }
-  renderMain();
+  if (state.toast) {
+    root.append(toastEl(state.toast));
+  }
+  if (state.modal) {
+    root.append(modalEl(state.modal));
+  }
 }
 
-function renderMain() {
-  const status = el("div", { class: "statusrow" },
-    el("div", { class: "dot " + state.status }),
-    el("div", { class: "statustext" }, statusLabel(state.status)),
-    el("div", { class: "statushint" }, state.transport ? `via ${state.transport}` : ""),
-  );
+function renderHome(host) {
+  host.append(renderTopbar());
+  for (const node of renderHero()) host.append(node);
+  host.append(renderDrawer());
+}
 
-  const kv = el("div", { class: "card" },
-    status,
-    el("div", { class: "kv" },
-      kvRow("Remote",     state.remote || "—"),
-      kvRow("Bytes ↑",    fmtBytes(state.bytesTx)),
-      kvRow("Bytes ↓",    fmtBytes(state.bytesRx)),
-      kvRow("Last event", state.message || "—"),
+function renderTitlebar() {
+  const drag = el("div", { class: "tb-drag", "data-tauri-drag-region": "" },
+    el("div", { class: "tb-brand" },
+      el("div", { class: "tb-mark" }),
+      el("span", {}, "Veil"),
     ),
   );
-
-  const profileBar = renderProfileBar();
-  const cfgBox = renderConfigCard();
-
-  const connectBtn = el("button", {
-    class: "primary",
-    disabled: state.status === "connecting" || state.status === "connected",
-    onclick: connect,
-  }, state.status === "connecting" ? "Connecting…" : "Connect");
-
-  const disconnectBtn = el("button", {
-    class: "danger",
-    disabled: state.status !== "connected" && state.status !== "connecting",
-    onclick: disconnect,
-  }, "Disconnect");
-
-  const settingsBtn = el("button", { onclick: () => { state.view = "settings"; render(); } }, "⚙ Settings");
-
-  const log = el("div", { class: "log" }, state.log.join("\n"));
-
-  root.append(
-    el("h1", {}, "Veil"),
-    el("p", { class: "subtitle" }, "Self-hosted, censorship-resistant VPN."),
-    kv,
-    profileBar,
-    cfgBox,
-    el("div", { class: "actions" }, connectBtn, disconnectBtn, settingsBtn),
-    log,
+  const ctrls = el("div", { class: "tb-ctrls" },
+    el("button", { class: "tb-btn", title: "Minimize", onclick: () => appWindow.minimize() }, tbIcon("min")),
+    el("button", { class: "tb-btn", title: "Maximize", onclick: () => appWindow.toggleMaximize() }, tbIcon("max")),
+    el("button", { class: "tb-btn close", title: "Hide to tray", onclick: () => appWindow.hide() }, tbIcon("close")),
   );
+  return el("div", { class: "titlebar" }, drag, ctrls);
 }
 
-function renderProfileBar() {
-  const select = el("select", {
-    onchange: (ev) => switchProfile(ev.target.value),
-  });
-  if (state.profiles.length === 0) {
-    select.append(el("option", { value: "" }, "(no profiles yet)"));
-  }
-  for (const p of state.profiles) {
-    const opt = el("option", { value: p.id }, p.name);
-    if (p.id === state.activeId) opt.selected = true;
-    select.append(opt);
-  }
-  return el("div", { class: "card profilebar" },
-    el("label", { for: "profile" }, "Profile"),
-    el("div", { class: "row" },
-      select,
-      el("button", { onclick: addProfile }, "+ Add"),
-      el("button", {
-        disabled: !state.activeId,
-        onclick: deleteProfile,
-      }, "🗑 Delete"),
+function tbIcon(kind) {
+  const wrap = document.createElement("span");
+  wrap.style.display = "inline-flex";
+  const svgs = {
+    min:   `<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2"><line x1="2.5" y1="6" x2="9.5" y2="6"/></svg>`,
+    max:   `<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="2.5" width="7" height="7" rx="0.5"/></svg>`,
+    close: `<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2"><line x1="3" y1="3" x2="9" y2="9"/><line x1="9" y1="3" x2="3" y2="9"/></svg>`,
+  };
+  wrap.innerHTML = svgs[kind] || "";
+  return wrap;
+}
+
+function renderTopbar() {
+  return el("div", { class: "topbar" },
+    el("div", { class: "topactions" },
+      iconBtn("paste", "Paste veil:// link", quickPasteLink),
+      iconBtn("gear",  "Settings",           () => { state.view = "settings"; render(); }),
     ),
   );
 }
 
-function renderConfigCard() {
-  const header = el("div", { class: "row collapse-header" },
-    el("label", { for: "cfg" }, "Configuration (paste a veil:// link or YAML)"),
-    el("button", {
-      class: "ghost",
-      onclick: () => { state.configCollapsed = !state.configCollapsed; render(); },
-    }, state.configCollapsed ? "▼ Show" : "▲ Hide"),
-  );
-  if (state.configCollapsed) {
-    return el("div", { class: "card" }, header);
-  }
-  const ta = el("textarea", {
-    id: "cfg",
-    spellcheck: "false",
-    placeholder: "veil://eyJTZXJ2ZXJzIjpbey4uLn1dfQ\n\n— or —\n\nservers:\n  - type: reality\n    addr: vps.example.com:443\n    sni: www.cloudflare.com\nserver_static_key_b64: ...\nstatic_key_path: /tmp/veil-client.key\nsocks5_listen: 127.0.0.1:1080",
-    oninput: (ev) => { state.configEditor = ev.target.value; },
-  });
-  ta.value = state.configEditor;
-  const saveBtn = el("button", {
-    onclick: saveActiveProfileConfig,
-    disabled: !state.activeId,
-  }, "Save to profile");
-  return el("div", { class: "card" },
-    header,
-    ta,
-    el("div", { class: "row" }, saveBtn),
-  );
+function renderHero() {
+  const active = activeProfile();
+  const server = renderServerChip(active);
+  const button = renderHeroButton();
+  const status = el("div", { class: "hero-status" }, statusLabel(state.status));
+  const detail = el("div", { class: "hero-detail" }, heroDetailText(active));
+  const stats = renderStats();
+  return [
+    server,
+    el("div", { class: "hero" }, button, status, detail),
+    stats,
+  ];
 }
 
-function renderSettings() {
-  const back = el("button", { onclick: () => { state.view = "main"; render(); } }, "← Back");
-
-  const autostart = renderSwitch("Launch at login", state.settings.autostart, async (v) => {
-    state.settings.autostart = v;
-    await persistSettings();
-    try {
-      await invoke("set_autostart", { enabled: v });
-    } catch (e) {
-      pushLog("autostart toggle failed: " + e);
-      state.settings.autostart = !v; // revert
-      await persistSettings();
-      render();
+function renderServerChip(active) {
+  const label = active ? active.name : "No server";
+  const sub   = active ? (extractServerLine(active.config) || "tap to edit") : "Tap to paste a veil:// link";
+  const click = () => {
+    if (!state.profiles.length) {
+      quickPasteLink();
+      return;
     }
-  });
+    state.serverMenuOpen = !state.serverMenuOpen;
+    render();
+  };
+  const chip = el("button", { class: "serverchip", onclick: click },
+    el("div", { class: "serverdot " + (active ? "ok" : "empty") }),
+    el("div", { class: "servertext" },
+      el("div", { class: "servername" }, label),
+      el("div", { class: "serversub"  }, sub),
+    ),
+    el("div", { class: "chevron" }, state.serverMenuOpen ? "▲" : "▼"),
+  );
+  if (!state.serverMenuOpen) return chip;
 
-  const notif = renderSwitch("OS notifications on connect/error", state.settings.notifications, async (v) => {
-    state.settings.notifications = v;
-    await persistSettings();
-  });
+  const items = state.profiles.map((p) =>
+    el("button", {
+      class: "menuitem" + (p.id === state.activeId ? " active" : ""),
+      onclick: async () => {
+        await selectProfile(p.id);
+        state.serverMenuOpen = false;
+        render();
+      },
+    },
+      el("div", { class: "menuitem-name" }, p.name),
+      el("div", { class: "menuitem-sub" }, extractServerLine(p.config) || ""),
+    ),
+  );
+  const actions = el("div", { class: "menuactions" },
+    smallBtn("+ Paste link", quickPasteLink),
+    smallBtn("✎ Edit",       () => {
+      const a = activeProfile();
+      state.editorBuffer = a ? a.config : "";
+      state.view = "editor";
+      state.serverMenuOpen = false;
+      render();
+    }, !state.activeId),
+    smallBtn("🗑 Delete",    deleteActiveProfile, !state.activeId),
+  );
+  return el("div", { class: "serverwrap" }, chip, el("div", { class: "menu" }, ...items, actions));
+}
 
-  const mimicry = el("div", { class: "row" },
-    el("label", { for: "mim" }, "Mimicry profile"),
-    selectField("mim", state.settings.mimicry, [
-      ["", "(off — fastest, most fingerprintable)"],
-      ["browse", "browse"],
-      ["video", "video"],
-      ["messaging", "messaging"],
-      ["search", "search"],
-    ], async (v) => { state.settings.mimicry = v; await persistSettings(); }),
+function renderHeroButton() {
+  const ringClass = "hero-btn " + state.status;
+  const onclick = () => {
+    if (state.status === "connecting") return;
+    if (state.status === "connected") disconnect();
+    else                              connect();
+  };
+  const inner = state.status === "connecting"
+    ? el("div", { class: "spinner" })
+    : el("div", { class: "power" }, powerIconSVG());
+  return el("button", {
+    class: ringClass,
+    onclick,
+    disabled: state.status === "connecting" || (!activeProfile() && state.status !== "connected"),
+    title: !activeProfile() ? "Add a server first" : (state.status === "connected" ? "Click to disconnect" : "Click to connect"),
+  }, inner);
+}
+
+function renderStats() {
+  return el("div", { class: "stats" },
+    statPill(iconSVG("up"),    fmtBytes(state.bytesTx)),
+    statPill(iconSVG("down"),  fmtBytes(state.bytesRx)),
+    el("div", { class: "stat", id: "uptime-pill" },
+      iconSVG("clock"),
+      el("span", { class: "statv", id: "uptime" }, state.status === "connected" ? fmtUptime(elapsed()) : "00:00:00"),
+    ),
+  );
+}
+
+function renderDrawer() {
+  const wrap = el("details", { class: "drawer" },
+    el("summary", {}, "▾ Diagnostics"),
+    el("div", { class: "drawer-body" },
+      el("div", { class: "kv compact" },
+        kvRow("Transport", state.transport || "—"),
+        kvRow("Remote",    state.remote    || "—"),
+        kvRow("Last event", state.message  || "—"),
+      ),
+      el("pre", { class: "log" }, state.log.join("\n") || "(no events yet)"),
+    ),
+  );
+  return wrap;
+}
+
+// --- settings page ---
+
+function renderSettings(host) {
+  const back = iconBtn("back", "Back", () => { state.view = "main"; render(); });
+  const head = el("div", { class: "topbar" }, back, el("div", { class: "brand" }, "Settings"));
+
+  const general = el("div", { class: "card" },
+    cardTitle("General"),
+    switchRow("Launch at login", state.settings.autostart, async (v) => {
+      state.settings.autostart = v;
+      await persistSettings();
+      try { await invoke("set_autostart", { enabled: v }); }
+      catch (e) { toast("Autostart toggle failed: " + e, "error"); }
+    }),
+    switchRow("OS notifications on connect / error", state.settings.notifications, async (v) => {
+      state.settings.notifications = v;
+      await persistSettings();
+    }),
   );
 
-  const decoy = renderSwitch("Decoy cover traffic (when supported by config)", state.settings.decoy, async (v) => {
-    state.settings.decoy = v;
-    await persistSettings();
-  });
+  const dpi = el("div", { class: "card" },
+    cardTitle("Anti-DPI"),
+    el("label", { class: "fieldlabel" }, "Mimicry profile"),
+    selectField(state.settings.mimicry, [
+      ["", "Off — fastest, most fingerprintable"],
+      ["browse", "Browsing"],
+      ["video", "Video streaming"],
+      ["messaging", "Messaging"],
+      ["search", "Search"],
+    ], async (v) => { state.settings.mimicry = v; await persistSettings(); }),
+    switchRow("Decoy cover traffic (when enabled in config)", state.settings.decoy, async (v) => {
+      state.settings.decoy = v;
+      await persistSettings();
+    }),
+  );
 
   const updateBox = el("div", { class: "card" },
-    el("h3", { class: "h3" }, "Updates"),
-    el("div", { class: "kv" },
+    cardTitle("Updates"),
+    el("div", { class: "kv compact" },
       kvRow("Current", state.update?.current || "—"),
       kvRow("Latest",  state.update?.latest  || "—"),
       kvRow("Status",
@@ -222,45 +292,268 @@ function renderSettings() {
         state.update.update_available ? "update available" : "up to date"),
     ),
     el("div", { class: "row" },
-      el("button", { onclick: doCheckUpdate }, "Check for updates"),
-      el("button", {
-        class: "primary",
-        disabled: !state.update?.update_available,
-        onclick: doApplyUpdate,
-      }, "Apply update"),
+      smallBtn("Check now", doCheckUpdate),
+      primaryBtn("Apply update", doApplyUpdate, !state.update?.update_available),
     ),
   );
 
-  root.append(
-    el("h1", {}, "Settings"),
-    back,
-    el("div", { class: "card settingscard" }, autostart, notif, mimicry, decoy),
-    updateBox,
-    el("p", { class: "subtitle" }, "Settings persist via tauri-plugin-store (veil.store.json)."),
-  );
+  host.append(head, general, dpi, updateBox);
 }
 
-function renderSwitch(label, value, onchange) {
-  const checkbox = el("input", {
-    type: "checkbox",
-    onchange: (ev) => onchange(ev.target.checked),
+function renderEditor(host) {
+  const back = iconBtn("back", "Back", () => { state.view = "main"; render(); });
+  const head = el("div", { class: "topbar" }, back, el("div", { class: "brand" }, "Edit server"));
+
+  const a = activeProfile();
+  const nameInput = el("input", {
+    type: "text",
+    placeholder: "Server name",
+    value: a?.name || "",
+    oninput: (ev) => { if (a) a.name = ev.target.value; },
   });
-  if (value) checkbox.checked = true;
-  return el("label", { class: "switchrow" },
-    checkbox,
-    el("span", {}, label),
+  const ta = el("textarea", {
+    spellcheck: "false",
+    placeholder: "veil://eyJTZXJ2ZXJzIjpbey4uLn1dfQ\n\n— or —\n\nservers:\n  - type: reality\n    addr: vps.example.com:443\n    sni: www.cloudflare.com\nserver_static_key_b64: ...\nstatic_key_path: /tmp/veil-client.key\nsocks5_listen: 127.0.0.1:1080",
+    oninput: (ev) => { state.editorBuffer = ev.target.value; },
+  });
+  ta.value = state.editorBuffer;
+  const save = primaryBtn("Save", async () => {
+    if (!a) return;
+    a.config = state.editorBuffer;
+    await persistProfiles();
+    toast("Saved profile \"" + a.name + "\".", "info");
+    state.view = "main";
+    render();
+  });
+
+  const card = el("div", { class: "card" },
+    el("label", { class: "fieldlabel" }, "Name"),
+    nameInput,
+    el("label", { class: "fieldlabel", style: "margin-top: 12px" }, "Configuration (paste a veil:// link or YAML)"),
+    ta,
+    el("div", { class: "row" }, save),
   );
+  host.append(head, card);
 }
 
-function selectField(id, value, options, onchange) {
-  const sel = el("select", { id, onchange: (ev) => onchange(ev.target.value) });
-  for (const [v, txt] of options) {
-    const o = el("option", { value: v }, txt);
-    if (v === value) o.selected = true;
-    sel.append(o);
-  }
-  return sel;
+// --- helpers ---
+
+function activeProfile() {
+  return state.profiles.find((p) => p.id === state.activeId) || null;
 }
+
+function elapsed() {
+  if (!state.startedAt) return 0;
+  return Math.floor((Date.now() - state.startedAt) / 1000);
+}
+
+function statusLabel(s) {
+  return ({
+    idle:        "Disconnected",
+    connecting:  "Connecting…",
+    connected:   "Connected",
+    error:       "Error",
+    stopped:     "Disconnected",
+  })[s] || s;
+}
+
+function heroDetailText(active) {
+  if (state.status === "connected") {
+    const where = state.transport ? `via ${state.transport}` : "";
+    return state.remote ? `${where} → ${state.remote}` : where;
+  }
+  if (state.status === "error") return state.message || "Connection failed";
+  if (!active) return "Add a server to get started";
+  return active.name;
+}
+
+function extractServerLine(cfg) {
+  if (!cfg) return "";
+  if (cfg.startsWith("veil://")) return "veil:// share link";
+  // Try to grab the first addr from YAML.
+  const m = cfg.match(/addr:\s*([^\s\n]+)/);
+  if (m) return m[1];
+  return "YAML config";
+}
+
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i ? 1 : 0)} ${u[i]}`;
+}
+
+function fmtUptime(s) {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(r)}`;
+}
+
+function pushLog(line) {
+  const ts = new Date().toLocaleTimeString();
+  state.log.push(`${ts} ${line}`);
+  if (state.log.length > 200) state.log.shift();
+  // Avoid full re-render for log-only updates if drawer is closed; keep it simple here.
+  render();
+}
+
+function toast(text, kind = "info") {
+  state.toast = { text, kind };
+  render();
+  setTimeout(() => {
+    if (state.toast && state.toast.text === text) {
+      state.toast = null;
+      render();
+    }
+  }, 4000);
+}
+
+// --- profile actions ---
+
+function quickPasteLink() {
+  openModal({
+    title: "Add server",
+    body: "Paste a veil:// share link, or paste a YAML configuration.",
+    fields: [
+      { key: "config", label: "Configuration", placeholder: "veil://eyJTZXJ2ZXJzIjpb...", multiline: true },
+      { key: "name",   label: "Name",          placeholder: `Server ${state.profiles.length + 1}` },
+    ],
+    submitLabel: "Add",
+    onSubmit: async (vals) => {
+      const cleaned = (vals.config || "").trim();
+      if (!cleaned) throw new Error("config is empty");
+      const fallbackName = (extractServerLine(cleaned) || `Server ${state.profiles.length + 1}`);
+      const name = (vals.name || "").trim() || fallbackName;
+      const id = String(Date.now());
+      state.profiles.push({ id, name, config: cleaned });
+      state.activeId = id;
+      await persistProfiles();
+      toast(`Added "${name}".`, "info");
+      render();
+    },
+  });
+}
+
+function deleteActiveProfile() {
+  if (!state.activeId) return;
+  const a = activeProfile();
+  openModal({
+    title: "Delete server",
+    body: `Delete "${a?.name}"? This cannot be undone.`,
+    submitLabel: "Delete",
+    danger: true,
+    onSubmit: async () => {
+      state.profiles = state.profiles.filter((p) => p.id !== state.activeId);
+      state.activeId = state.profiles[0]?.id ?? null;
+      await persistProfiles();
+      toast("Deleted.", "info");
+      render();
+    },
+  });
+}
+
+async function selectProfile(id) {
+  state.activeId = id;
+  await persistProfiles();
+}
+
+// --- connect / disconnect ---
+
+async function connect() {
+  const a = activeProfile();
+  if (!a) { toast("Add a server first.", "error"); return; }
+  const cfg = (a.config || "").trim();
+  if (!cfg) { toast("Active server has empty config.", "error"); return; }
+  state.status = "connecting";
+  state.message = "starting client…";
+  state.bytesTx = 0; state.bytesRx = 0;
+  pushLog("connect requested");
+  try {
+    await invoke("veil_start", { configText: cfg });
+  } catch (e) {
+    state.status = "error";
+    state.message = String(e);
+    toast(String(e), "error");
+    pushLog("connect failed: " + e);
+    render();
+  }
+}
+
+async function disconnect() {
+  pushLog("disconnect requested");
+  try { await invoke("veil_stop"); }
+  catch (e) { toast("Disconnect failed: " + e, "error"); pushLog("disconnect failed: " + e); }
+}
+
+async function doCheckUpdate() {
+  toast("Checking for updates…", "info");
+  try {
+    state.update = await invoke("check_update");
+    pushLog(`update check: latest=${state.update.latest} ${state.update.update_available ? "(available)" : "(up to date)"}`);
+  } catch (e) {
+    toast("Update check failed: " + e, "error");
+    state.update = null;
+  }
+  render();
+}
+
+function doApplyUpdate() {
+  if (!state.update?.update_available) return;
+  openModal({
+    title: "Install update",
+    body: `Download and install ${state.update.latest}? The app will need to restart afterwards.`,
+    submitLabel: "Install",
+    onSubmit: async () => {
+      toast("Applying update…", "info");
+      try {
+        await invoke("apply_update");
+        toast("Update installed; restart the app.", "info");
+      } catch (e) {
+        throw new Error("Update apply failed: " + e);
+      }
+    },
+  });
+}
+
+// --- event wiring ---
+
+listen("veil-event", (msg) => {
+  const e = msg.payload || {};
+  if (e.transport) state.transport = e.transport;
+  if (e.remote) state.remote = e.remote;
+  if (typeof e.bytes_tx === "number") state.bytesTx = e.bytes_tx;
+  if (typeof e.bytes_rx === "number") state.bytesRx = e.bytes_rx;
+  if (e.message) state.message = e.message;
+  switch (e.type) {
+    case 1:
+      state.status = "connected";
+      state.startedAt = Date.now();
+      pushLog(`connected via ${e.transport} → ${e.remote}`);
+      break;
+    case 2:
+      state.status = state.status === "connecting" ? "error" : "stopped";
+      state.startedAt = 0;
+      pushLog("disconnected");
+      break;
+    case 3:
+      state.status = "error";
+      state.startedAt = 0;
+      pushLog("error: " + (e.message || "?"));
+      break;
+    case 4: pushLog(`traffic tx=${fmtBytes(e.bytes_tx)} rx=${fmtBytes(e.bytes_rx)}`); break;
+    case 5: pushLog(`transport switch: ${e.transport}`); break;
+  }
+  render();
+});
+
+listen("tray-action", (msg) => {
+  const action = msg.payload;
+  if (action === "connect") connect();
+  else if (action === "disconnect") disconnect();
+});
+
+// --- DOM helpers ---
 
 function el(tag, props = {}, ...children) {
   const e = document.createElement(tag);
@@ -283,152 +576,131 @@ function kvRow(k, v) {
   return [el("div", { class: "k" }, k), el("div", { class: "v" }, v)];
 }
 
-function statusLabel(s) {
-  return ({
-    idle: "Disconnected",
-    connecting: "Connecting…",
-    connected: "Connected",
-    error: "Error",
-    stopped: "Stopped",
-  })[s] || s;
+function statPill(label, value) {
+  const k = typeof label === "string"
+    ? el("span", { class: "statk" }, label)
+    : label;
+  return el("div", { class: "stat" },
+    k,
+    el("span", { class: "statv" }, value),
+  );
 }
 
-function fmtBytes(n) {
-  if (!n) return "0 B";
-  const u = ["B","KB","MB","GB","TB"];
-  let i = 0, v = n;
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return `${v.toFixed(i ? 1 : 0)} ${u[i]}`;
+function iconBtn(kind, title, onclick) {
+  return el("button", { class: "iconbtn", title, onclick }, iconSVG(kind));
 }
 
-function pushLog(line) {
-  const ts = new Date().toLocaleTimeString();
-  state.log.push(`${ts} ${line}`);
-  if (state.log.length > 200) state.log.shift();
-  render();
+function smallBtn(label, onclick, disabled = false) {
+  return el("button", { class: "smallbtn", onclick, disabled }, label);
 }
 
-// --- profile actions ---
-
-async function addProfile() {
-  const name = window.prompt("Profile name?");
-  if (!name) return;
-  const id = String(Date.now());
-  state.profiles.push({ id, name, config: state.configEditor || "" });
-  state.activeId = id;
-  await persistProfiles();
-  render();
+function primaryBtn(label, onclick, disabled = false) {
+  return el("button", { class: "primary", onclick, disabled }, label);
 }
 
-async function deleteProfile() {
-  if (!state.activeId) return;
-  if (!window.confirm("Delete the active profile?")) return;
-  state.profiles = state.profiles.filter((p) => p.id !== state.activeId);
-  state.activeId = state.profiles[0]?.id ?? null;
-  state.configEditor = state.profiles[0]?.config ?? "";
-  await persistProfiles();
-  render();
+function cardTitle(t) { return el("div", { class: "cardtitle" }, t); }
+
+function switchRow(label, value, onchange) {
+  const cb = el("input", { type: "checkbox", onchange: (ev) => onchange(ev.target.checked) });
+  if (value) cb.checked = true;
+  return el("label", { class: "switchrow" }, cb, el("span", {}, label));
 }
 
-async function switchProfile(id) {
-  state.activeId = id;
-  const p = state.profiles.find((p) => p.id === id);
-  state.configEditor = p?.config ?? "";
-  await persistProfiles();
-  render();
-}
-
-async function saveActiveProfileConfig() {
-  const p = state.profiles.find((p) => p.id === state.activeId);
-  if (!p) return;
-  p.config = state.configEditor;
-  await persistProfiles();
-  pushLog(`saved profile "${p.name}"`);
-}
-
-// --- connect / disconnect ---
-
-async function connect() {
-  const cfg = (state.configEditor || "").trim();
-  if (!cfg) { state.message = "config is empty"; render(); return; }
-  state.status = "connecting";
-  state.message = "starting client…";
-  state.bytesTx = 0; state.bytesRx = 0;
-  pushLog("connect requested");
-  render();
-  try {
-    await invoke("veil_start", { configText: cfg });
-    pushLog("started");
-  } catch (e) {
-    state.status = "error";
-    state.message = String(e);
-    pushLog("connect failed: " + e);
-    render();
+function selectField(value, options, onchange) {
+  const sel = el("select", { onchange: (ev) => onchange(ev.target.value) });
+  for (const [v, txt] of options) {
+    const o = el("option", { value: v }, txt);
+    if (v === value) o.selected = true;
+    sel.append(o);
   }
+  return sel;
 }
 
-async function disconnect() {
-  pushLog("disconnect requested");
-  try {
-    await invoke("veil_stop");
-    pushLog("stopped");
-  } catch (e) {
-    pushLog("disconnect failed: " + e);
-  }
+function toastEl(t) {
+  return el("div", { class: "toast " + t.kind }, t.text);
 }
 
-// --- update ---
-
-async function doCheckUpdate() {
-  pushLog("checking for updates…");
-  try {
-    state.update = await invoke("check_update");
-    pushLog(`update check: latest=${state.update.latest} ${state.update.update_available ? "(available)" : "(up to date)"}`);
-  } catch (e) {
-    pushLog("update check failed: " + e);
-    state.update = null;
+// Modal: { title, body?, fields?: [{key,label,placeholder,multiline,initial}], submitLabel?, danger?, onSubmit(values), cancelLabel? }
+function openModal(opts) {
+  state.modal = { ...opts, _values: {}, _refs: {} };
+  // seed initial values
+  for (const f of opts.fields || []) {
+    state.modal._values[f.key] = f.initial ?? "";
   }
   render();
+  // focus first input
+  setTimeout(() => {
+    const first = document.querySelector(".modal-card input, .modal-card textarea");
+    if (first) first.focus();
+  }, 0);
+}
+function closeModal() { state.modal = null; render(); }
+
+function modalEl(m) {
+  const fields = (m.fields || []).map((f) => {
+    const props = {
+      placeholder: f.placeholder || "",
+      oninput: (ev) => { m._values[f.key] = ev.target.value; },
+      onkeydown: (ev) => {
+        if (ev.key === "Escape") { closeModal(); }
+        if (ev.key === "Enter" && !f.multiline && !ev.shiftKey) {
+          ev.preventDefault();
+          submit();
+        }
+      },
+    };
+    const input = f.multiline ? el("textarea", props) : el("input", { type: "text", ...props });
+    input.value = m._values[f.key] || "";
+    const wrap = el("div", { class: "modal-field" });
+    if (f.label) wrap.append(el("label", { class: "fieldlabel" }, f.label));
+    wrap.append(input);
+    return wrap;
+  });
+
+  const submit = async () => {
+    try {
+      const r = m.onSubmit(m._values);
+      if (r && typeof r.then === "function") await r;
+    } catch (e) {
+      toast(String(e), "error");
+      return;
+    }
+    closeModal();
+  };
+
+  const card = el("div", { class: "modal-card" },
+    el("div", { class: "modal-title" }, m.title),
+    m.body ? el("div", { class: "modal-body" }, m.body) : null,
+    ...fields,
+    el("div", { class: "modal-actions" },
+      el("button", { class: "smallbtn", onclick: closeModal }, m.cancelLabel || "Cancel"),
+      el("button", { class: m.danger ? "danger" : "primary", onclick: submit }, m.submitLabel || "OK"),
+    ),
+  );
+  return el("div", { class: "modal-backdrop", onclick: (ev) => { if (ev.target === ev.currentTarget) closeModal(); } }, card);
 }
 
-async function doApplyUpdate() {
-  if (!state.update?.update_available) return;
-  if (!window.confirm("Download and install the latest release? The app will need to restart.")) return;
-  pushLog("applying update…");
-  try {
-    await invoke("apply_update");
-    pushLog("update installed; restart the app to use the new binary.");
-  } catch (e) {
-    pushLog("update apply failed: " + e);
-  }
+function powerIconSVG() {
+  const wrap = document.createElement("span");
+  wrap.innerHTML = `<svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>`;
+  return wrap.firstElementChild;
 }
 
-// --- event wiring ---
-
-listen("veil-event", (msg) => {
-  const e = msg.payload || {};
-  if (e.transport) state.transport = e.transport;
-  if (e.remote) state.remote = e.remote;
-  if (e.bytes_tx) state.bytesTx = e.bytes_tx;
-  if (e.bytes_rx) state.bytesRx = e.bytes_rx;
-  if (e.message) state.message = e.message;
-  switch (e.type) {
-    case 1: state.status = "connected"; pushLog(`connected via ${e.transport} → ${e.remote}`); break;
-    case 2: state.status = state.status === "connecting" ? "error" : "stopped"; pushLog("disconnected"); break;
-    case 3: state.status = "error"; pushLog("error: " + (e.message || "?")); break;
-    case 4: pushLog(`traffic tx=${fmtBytes(e.bytes_tx)} rx=${fmtBytes(e.bytes_rx)}`); break;
-    case 5: pushLog(`transport switch: ${e.transport}`); break;
-  }
-  render();
-});
-
-// Tray menu emits "tray-action" with one of "connect"|"disconnect".
-// The tray and the in-window buttons drive the same code paths so
-// state stays consistent however the user triggered the action.
-listen("tray-action", (msg) => {
-  const action = msg.payload;
-  if (action === "connect") connect();
-  else if (action === "disconnect") disconnect();
-});
+function iconSVG(kind) {
+  const wrap = document.createElement("span");
+  wrap.style.display = "inline-flex";
+  const sizes = { up: 13, down: 13, clock: 13 };
+  const sz = sizes[kind] || 18;
+  const svgs = {
+    gear:  `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+    paste: `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`,
+    back:  `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>`,
+    up:    `<svg viewBox="0 0 24 24" width="${sz}" height="${sz}" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`,
+    down:  `<svg viewBox="0 0 24 24" width="${sz}" height="${sz}" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>`,
+    clock: `<svg viewBox="0 0 24 24" width="${sz}" height="${sz}" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+  };
+  wrap.innerHTML = svgs[kind] || "";
+  return wrap;
+}
 
 bootStore();
