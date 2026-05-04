@@ -48,6 +48,17 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       installer paths land in the next milestone.
 - [ ] **Phase 3.6** — Tauri installer: SSH remote install + edge
       OAuth flows; cross-platform release packaging.
+- [x] **Phase 4 (CLI/SDK half)** — Refactor of the connect path into
+      a reusable `internal/client.Client`, a CGO-built libveil shared
+      library exposing a stable C ABI (`core/pkg/cgo` +
+      `core/pkg/cgo/include/veil.h`), a safe Rust crate over that ABI
+      at `sdks/veil-rs`, a ctypes Python package at `sdks/veil-py`,
+      and a `veil://` share-link URI scheme so client configs can be
+      distributed as a single one-line string (printed by
+      `veil user show-config`, accepted by `veil connect --link`).
+- [ ] **Phase 4.5** — Desktop client (Tauri), mobile clients
+      (React Native / NetworkExtension / VpnService), Node bindings
+      via NAPI.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
 
 APIs, configuration formats, and the wire protocol are unstable and will
