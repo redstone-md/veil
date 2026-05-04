@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/redstone-md/veil/core/internal/config"
+	"github.com/redstone-md/veil/core/internal/sharelink"
 	"github.com/redstone-md/veil/core/internal/users"
 )
 
@@ -341,7 +342,11 @@ func showConfigCmd() *cli.Command {
 					Fingerprint: cmd.String("fingerprint"),
 				}},
 			}
-			out, err := yaml.Marshal(cfg)
+			out, err := yaml.Marshal(&cfg)
+			if err != nil {
+				return err
+			}
+			link, err := sharelink.Encode(&cfg)
 			if err != nil {
 				return err
 			}
@@ -350,6 +355,7 @@ func showConfigCmd() *cli.Command {
 			fmt.Printf("#   %s\n", u.PubkeyB64)
 			fmt.Printf("# If the existing client key does not match, run `veil user regen --pubkey <new>` after the client first connects.\n\n")
 			os.Stdout.Write(out)
+			fmt.Printf("\n# share-link (paste into a client with `veil connect --link`):\n%s\n", link)
 			return nil
 		},
 	}
