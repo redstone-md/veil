@@ -25,9 +25,14 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       end-to-end TCP forwarding, Docker Compose deploy.
 - [x] **Phase 2** — Anti-DPI layer: WebSocket-over-TLS transport, uTLS browser
       fingerprint mimicry, multi-transport listener / fall-back dialer, dynamic
-      SNI pool, cover-traffic decoy engine. Reality transport ships as a
-      design + skeleton (functional implementation is the next milestone).
-- [ ] **Phase 2.5** — Reality transport functional implementation.
+      SNI pool, cover-traffic decoy engine.
+- [x] **Phase 2.5** — TLS-Reality transport: client embeds an HMAC-derived
+      auth tag in the TLS SessionID; server verifies against the per-deployment
+      secret derived from its static Noise XK key. Probe traffic (anything
+      without a valid tag) is transparently spliced to the configured target
+      origin so probes see a real, third-party TLS response (real cert, real
+      content). Authenticated clients get a forged TLS cert whose SAN names
+      the target SNI, then run a Noise XK + VWP/1 session inside.
 - [ ] **Phase 3** — Self-host UX: Tauri installer, embedded admin UI, ACME,
       user management.
 - [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.

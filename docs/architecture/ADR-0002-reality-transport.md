@@ -1,6 +1,6 @@
 # ADR-0002: TLS-Reality as the high-priority anti-probe transport
 
-**Status:** Accepted (skeleton landed; functional implementation deferred)
+**Status:** Accepted (functional implementation landed)
 **Date:** 2026-05-04
 **Deciders:** Initial maintainer
 
@@ -32,18 +32,35 @@ anti-censorship VPN deployments in CN, RU, and IR.
 
 We adopt TLS-Reality as a first-class Veil transport.
 
-In this revision we land:
+Phase 2.5 lands the functional implementation:
 
-- A spec stub at `internal/transport/realitytr/` describing the
-  structures and the packaged behaviour.
-- Configuration plumbing: `config.TransportReality` is recognised as a
-  type and produces a "not yet implemented" error so users see a clear
-  signal rather than a silent absence.
-- This ADR documenting the decision and design intent.
+- `internal/transport/realitytr/hello.go` — minimal TLS ClientHello
+  byte parser sufficient to extract SNI and SessionID for the routing
+  decision, returning the consumed bytes so they can be replayed.
+- `internal/transport/realitytr/auth.go` — PSK derivation
+  (SHA-256 over a domain separator and the server's static public
+  key), HMAC-SHA-256 auth tag construction with a 60-second time
+  bucket, ±5-bucket clock-skew tolerance, and a replay window that
+  rejects reused nonces within the validity horizon.
+- `internal/transport/realitytr/listener.go` — TCP listener that
+  parses the ClientHello, verifies the tag, and either upgrades the
+  connection (forged cert with CN matching the target SNI, served
+  through `crypto/tls`) or transparently splices it to the real
+  target so probes see the real third-party response.
+- `internal/transport/realitytr/dialer.go` — uTLS client whose
+  ClientHello is built from a Chrome preset and then has its
+  SessionID overwritten with the auth tag before being sent.
+- Config plumbing: `transports[*].target_sni` and
+  `transports[*].target_addr` on the server side, no extra config
+  on the client side beyond `type: reality`.
 
-We **defer** the functional implementation to a dedicated work
-sequence because Reality requires careful cryptographic and TLS
-plumbing that is best done with focused review.
+The simplifying design choice is to use a PSK derived from the
+already-distributed server static public key, rather than per-handshake
+ECDH. This loses forward secrecy on the auth-tag layer; the Veil
+session above still derives ephemeral session keys via Noise XK so the
+data plane retains forward secrecy. The trade-off is acceptable for
+Phase 2.5 and may be revisited (full ECDH-derived per-handshake key
+in a TLS extension) in a follow-up RFC.
 
 ## Implementation plan (for the next revision)
 
