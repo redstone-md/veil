@@ -1,0 +1,37 @@
+# Veil server deployment with Docker Compose.
+#
+# Quick start:
+#   1. cp server.example.yaml server.yaml          (and edit if needed)
+#   2. cp authorized_keys.example authorized_keys  (paste client pub keys here)
+#   3. docker compose up -d
+#   4. docker compose logs -f veil
+#   5. To get the server's static public key:
+#        docker compose exec veil cat /var/lib/veil/server.key | sed -n '2p'
+#      Distribute that key (and the server host:port) to clients.
+#
+# State (the long-term server keypair) lives in the named
+# `veil-state` volume so it survives `docker compose down`.
+
+services:
+  veil:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: ghcr.io/redstone-md/veil:dev
+    container_name: veil
+    restart: unless-stopped
+    ports:
+      - "${VEIL_PORT:-18443}:18443/udp"
+    volumes:
+      - ./server.yaml:/etc/veil/server.yaml:ro
+      - ./authorized_keys:/etc/veil/authorized_keys:ro
+      - veil-state:/var/lib/veil
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/veil", "version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  veil-state:

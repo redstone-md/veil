@@ -1,0 +1,11 @@
+# One base64-encoded Noise XK static public key per line.
+#
+# Lines beginning with `#` and blank lines are ignored.
+#
+# To get a client key, run on the client machine after `veil connect`
+# has been started once: the binary creates a fresh keypair on first
+# run, prints the public key on the first log line, and persists the
+# private side in the configured `static_key_path`.
+#
+# Example (do NOT use this; it is a placeholder):
+# AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=

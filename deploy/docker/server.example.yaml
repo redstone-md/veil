@@ -1,0 +1,17 @@
+# Example Veil server configuration for the Docker Compose deployment.
+#
+# Copy this to `server.yaml` (next to compose.yml) and edit if needed.
+# The default values below are appropriate for a single-host deployment
+# behind the compose port mapping.
+
+# Bind inside the container; the compose `ports:` line maps host UDP
+# 18443 to this. Change both if you want to expose a different port.
+listen: "0.0.0.0:18443"
+
+# Persisted in the `veil-state` volume so it survives container
+# restarts. Generated automatically on first launch.
+static_key_path: "/var/lib/veil/server.key"
+
+# Mounted read-only from the file you maintain next to compose.yml.
+# One base64-encoded client static public key per line.
+authorized_keys_path: "/etc/veil/authorized_keys"
