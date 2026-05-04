@@ -142,7 +142,13 @@ async fn get_autostart(app: AppHandle) -> Result<bool, String> {
 /// in core/internal/update; the desktop UI just renders the result.
 #[tauri::command]
 async fn check_update() -> Result<UpdateInfo, String> {
-    let exe = veil_cli_path()?;
+    let exe = match veil_cli_path() {
+        Some(p) => p,
+        None => return Err(
+            "Updates unavailable: bundled `veil` CLI was not found next to the app. \
+             This is normal for dev builds; release installers ship the CLI alongside the GUI.".into(),
+        ),
+    };
     let output = std::process::Command::new(&exe)
         .args(["update", "check", "--json"])
         .output()
@@ -157,7 +163,9 @@ async fn check_update() -> Result<UpdateInfo, String> {
 
 #[tauri::command]
 async fn apply_update() -> Result<(), String> {
-    let exe = veil_cli_path()?;
+    let exe = veil_cli_path().ok_or_else(|| {
+        "Updates unavailable: bundled `veil` CLI was not found next to the app.".to_string()
+    })?;
     let output = std::process::Command::new(&exe)
         .args(["update", "apply", "--cosign"])
         .output()
@@ -177,22 +185,28 @@ struct UpdateInfo {
 }
 
 /// Resolve the bundled `veil` CLI binary. The desktop installer ships
-/// it next to the GUI executable; in dev builds we fall back to PATH.
-fn veil_cli_path() -> Result<std::path::PathBuf, String> {
-    let exe_dir = std::env::current_exe()
-        .map_err(|e| format!("current_exe: {e}"))?
-        .parent()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| "current_exe has no parent".to_string())?;
-    let candidate = exe_dir.join(if cfg!(windows) { "veil.exe" } else { "veil" });
-    if candidate.exists() {
-        return Ok(candidate);
+/// it next to the GUI executable; in dev builds neither file is
+/// present, in which case we return None so the caller can show the
+/// user a friendlier 'Updates unavailable' message instead of the raw
+/// 'program not found' error from the OS.
+fn veil_cli_path() -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let bundled = exe_dir.join(if cfg!(windows) { "veil.exe" } else { "veil" });
+    if bundled.exists() {
+        return Some(bundled);
     }
-    Ok(std::path::PathBuf::from(if cfg!(windows) {
-        "veil.exe"
-    } else {
-        "veil"
-    }))
+    // Fall back to PATH lookup so a developer with `veil` on $PATH can
+    // still exercise the in-app update flow without copying the CLI
+    // next to the dev binary.
+    let on_path = if cfg!(windows) { "veil.exe" } else { "veil" };
+    let path_env = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_env) {
+        let candidate = dir.join(on_path);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// Surface select runtime events as OS notifications. We deliberately
