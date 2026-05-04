@@ -52,7 +52,11 @@ linters:
         - (*github.com/redstone-md/veil/core/internal/transport.FanInListener).Close
         - (github.com/redstone-md/veil/core/internal/transport.Listener).Close
     misspell:
-      locale: US
+      # The codebase is written in British English (initialise,
+      # serialise, behaviour, signalled). Setting the locale to UK
+      # avoids ~30 false positives that would otherwise flag every
+      # doc comment.
+      locale: UK
     revive:
       rules:
         - name: exported
