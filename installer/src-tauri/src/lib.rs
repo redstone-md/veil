@@ -20,6 +20,7 @@ use serde::Deserialize;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
+mod admin;
 mod edge_deploy;
 mod release;
 mod ssh;
@@ -218,12 +219,72 @@ async fn edge_save(
     Ok(dir.display().to_string())
 }
 
+// --- admin HTTP commands ---
+
+#[tauri::command]
+async fn admin_version(creds: admin::ServerCreds) -> Result<admin::VersionInfo, String> {
+    admin::version(&creds).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn admin_dashboard(creds: admin::ServerCreds) -> Result<serde_json::Value, String> {
+    admin::dashboard(&creds).await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn admin_users_list(creds: admin::ServerCreds) -> Result<serde_json::Value, String> {
+    admin::users_list(&creds).await.map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Debug, Deserialize)]
+struct UserAddArgs {
+    creds: admin::ServerCreds,
+    name: String,
+    #[serde(default)]
+    pubkey_b64: Option<String>,
+}
+
+#[tauri::command]
+async fn admin_user_add(args: UserAddArgs) -> Result<serde_json::Value, String> {
+    admin::user_add(&args.creds, &args.name, args.pubkey_b64.as_deref())
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Debug, Deserialize)]
+struct UserDeleteArgs {
+    creds: admin::ServerCreds,
+    id: String,
+}
+
+#[tauri::command]
+async fn admin_user_delete(args: UserDeleteArgs) -> Result<(), String> {
+    admin::user_delete(&args.creds, &args.id)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[derive(Debug, Deserialize)]
+struct UserPatchArgs {
+    creds: admin::ServerCreds,
+    id: String,
+    patch: serde_json::Value,
+}
+
+#[tauri::command]
+async fn admin_user_patch(args: UserPatchArgs) -> Result<serde_json::Value, String> {
+    admin::user_update(&args.creds, &args.id, args.patch)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             save_compose,
             ssh_probe,
@@ -234,6 +295,12 @@ pub fn run() {
             edge_deploy_fly,
             release_latest,
             release_fetch_veil,
+            admin_version,
+            admin_dashboard,
+            admin_users_list,
+            admin_user_add,
+            admin_user_delete,
+            admin_user_patch,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]

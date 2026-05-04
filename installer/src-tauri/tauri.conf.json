@@ -13,22 +13,21 @@
     "windows": [
       {
         "title": "Veil Installer",
-        "width": 880,
-        "height": 720,
-        "minWidth": 640,
-        "minHeight": 520,
+        "width": 1080,
+        "height": 760,
+        "minWidth": 880,
+        "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true
+        "decorations": false,
+        "shadow": true
       }
     ],
     "security": {
       "csp": null
     }
   },
-  "plugins": {
-    "fs": { "scope": ["$DESKTOP/*", "$DOWNLOAD/*", "$DOCUMENT/*"] }
-  },
+  "plugins": {},
   "bundle": {
     "active": true,
     "category": "Utility",

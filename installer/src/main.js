@@ -1,536 +1,916 @@
-// Veil Installer — minimum viable Phase 3.5 GUI.
+// Veil Installer — manager-first GUI.
 //
-// Three deploy paths are sketched here. Only the "Docker" path is
-// fully implemented in this revision; the SSH and Edge paths are
-// stubbed and surface a "coming soon" notice. The intent is to
-// land the navigation shell and the Docker output flow first, then
-// fill in the remote-install paths in subsequent commits.
+// Sidebar shell with two top-level sections:
+//
+//   Servers — saved deployments. Per-server view shows reachability
+//             (admin /api/version), dashboard snapshot, and a users
+//             tab driven by /api/users CRUD. Each user row offers a
+//             one-click share link emit.
+//
+//   Deploy  — the original three workflows (Docker compose generator,
+//             SSH bring-up, Edge worker bundle). On successful SSH
+//             install the resulting server's admin URL + credentials
+//             are saved automatically into Servers.
+//
+// Storage: tauri-plugin-store at installer.store.json. Holds the
+// servers list, the active server id, and any user-edited form
+// state we want to remember.
 
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Store } from "@tauri-apps/plugin-store";
+
+const appWindow = getCurrentWindow();
+const STORE_FILE = "installer.store.json";
 
 const root = document.getElementById("app");
-const state = { route: "home", form: {} };
+const state = {
+  view: "servers", // servers | server-detail | deploy | deploy-compose | deploy-ssh | deploy-edge | settings
+  servers: [],     // [{ id, label, base_url, basic_user, basic_pass, ssh? }]
+  activeId: null,
+  serverDetailTab: "overview", // overview | users
+  serverProbes: {}, // id → { reachable, version, dashboard, users, error, ts }
+  modal: null,
+  toast: null,
+  deploy: {
+    composeYaml: defaultComposeYaml(),
+    ssh: { host: "", port: "22", user: "root", password: "", probe: null, log: [], busy: false },
+    edge: { provider: "deno", origin_host: "", origin_port: "443", path: "/ws", app_name: "veil-edge", files: null },
+  },
+};
+
+let store = null;
+
+async function bootStore() {
+  store = await Store.load(STORE_FILE, { autoSave: true });
+  state.servers = (await store.get("servers")) || [];
+  state.activeId = (await store.get("active_server")) || (state.servers[0]?.id ?? null);
+  if (state.activeId && state.servers.find((s) => s.id === state.activeId)) {
+    state.view = "server-detail";
+  }
+  render();
+}
+
+async function persistServers() {
+  await store.set("servers", state.servers);
+  await store.set("active_server", state.activeId);
+}
+
+// --- render ---
 
 function render() {
   root.innerHTML = "";
-  switch (state.route) {
-    case "home":
-      renderHome();
-      break;
-    case "docker":
-      renderDocker();
-      break;
-    case "ssh":
-      renderSSH();
-      break;
-    case "edge":
-      renderEdge();
-      break;
+  root.append(renderTitlebar());
+  const shell = el("div", { class: "shell" });
+  shell.append(renderSidebar());
+  const main = el("div", { class: "main" });
+  shell.append(main);
+  root.append(shell);
+  switch (state.view) {
+    case "server-detail":  renderServerDetail(main); break;
+    case "deploy":         renderDeployIndex(main); break;
+    case "deploy-compose": renderDeployCompose(main); break;
+    case "deploy-ssh":     renderDeploySSH(main); break;
+    case "deploy-edge":    renderDeployEdge(main); break;
+    case "settings":       renderSettings(main); break;
+    case "servers":
+    default:               renderServersIndex(main);
+  }
+  if (state.toast) root.append(toastEl(state.toast));
+  if (state.modal) root.append(modalEl(state.modal));
+}
+
+function renderTitlebar() {
+  const drag = el("div", { class: "tb-drag", "data-tauri-drag-region": "" },
+    el("div", { class: "tb-brand" },
+      el("div", { class: "tb-mark" }),
+      el("span", {}, "Veil Installer"),
+    ),
+  );
+  const ctrls = el("div", { class: "tb-ctrls" },
+    el("button", { class: "tb-btn", title: "Minimize", onclick: () => appWindow.minimize() }, tbIcon("min")),
+    el("button", { class: "tb-btn", title: "Maximize", onclick: () => appWindow.toggleMaximize() }, tbIcon("max")),
+    el("button", { class: "tb-btn close", title: "Close", onclick: () => appWindow.close() }, tbIcon("close")),
+  );
+  return el("div", { class: "titlebar" }, drag, ctrls);
+}
+
+function renderSidebar() {
+  const sb = el("div", { class: "sidebar" });
+  sb.append(el("div", { class: "side-section" }, "Servers"));
+  if (state.servers.length === 0) {
+    sb.append(el("div", { class: "empty", style: "padding: 8px 12px; text-align:left" }, "No servers yet."));
+  } else {
+    for (const s of state.servers) {
+      const probe = state.serverProbes[s.id];
+      const dotClass = probe ? (probe.reachable ? "ok" : "bad") : "";
+      const item = el("button", {
+        class: "side-item" + (state.view === "server-detail" && state.activeId === s.id ? " active" : ""),
+        onclick: () => selectServer(s.id),
+      },
+        el("div", { class: "dot " + dotClass }),
+        el("div", { class: "label" }, s.label),
+      );
+      sb.append(item);
+    }
+  }
+  sb.append(el("button", { class: "side-add", onclick: openAddServer }, "+ Add server"));
+
+  sb.append(el("div", { class: "side-section" }, "Deploy"));
+  sb.append(sideNav("deploy", "All workflows"));
+  sb.append(sideNav("deploy-compose", "Docker compose"));
+  sb.append(sideNav("deploy-ssh", "Install via SSH"));
+  sb.append(sideNav("deploy-edge", "Edge worker"));
+
+  sb.append(el("div", { class: "side-section" }, "App"));
+  sb.append(sideNav("settings", "About / Settings"));
+  return sb;
+}
+
+function sideNav(view, label) {
+  return el("button", {
+    class: "side-item" + (state.view === view ? " active" : ""),
+    onclick: () => { state.view = view; render(); },
+  },
+    el("div", { class: "label" }, label),
+  );
+}
+
+// --- Servers index (empty state) ---
+
+function renderServersIndex(host) {
+  host.append(
+    el("h1", { class: "h1" }, "Servers"),
+    el("p", { class: "subtitle" }, "Manage previously-deployed Veil servers, or roll out a new one from the Deploy section."),
+  );
+  if (state.servers.length === 0) {
+    host.append(el("div", { class: "card" },
+      el("div", { class: "cardtitle" }, "Get started"),
+      el("p", { class: "subtitle" }, "Deploy your first server, or add an existing one by host + admin credentials."),
+      el("div", { class: "row" },
+        el("button", { class: "primary", onclick: () => { state.view = "deploy"; render(); } }, "Deploy a server"),
+        el("button", { class: "smallbtn", onclick: openAddServer }, "Add existing"),
+      ),
+    ));
+  } else {
+    const grid = el("div", { class: "choicegrid" });
+    for (const s of state.servers) {
+      grid.append(el("button", { class: "choice", onclick: () => selectServer(s.id) },
+        el("div", { class: "name" }, s.label),
+        el("div", { class: "body" }, s.base_url),
+      ));
+    }
+    host.append(grid);
   }
 }
+
+// --- Server detail view ---
+
+async function selectServer(id) {
+  state.activeId = id;
+  state.view = "server-detail";
+  state.serverDetailTab = "overview";
+  await persistServers();
+  render();
+  refreshServer(id);
+}
+
+async function refreshServer(id) {
+  const s = state.servers.find((x) => x.id === id);
+  if (!s) return;
+  const creds = { base_url: s.base_url, username: s.basic_user, password: s.basic_pass };
+  state.serverProbes[id] = { ...(state.serverProbes[id] || {}), busy: true };
+  render();
+  try {
+    const version = await invoke("admin_version", { creds });
+    let dashboard = null;
+    let users = null;
+    try { dashboard = await invoke("admin_dashboard", { creds }); }
+    catch (_) {}
+    try { users = await invoke("admin_users_list", { creds }); }
+    catch (_) {}
+    state.serverProbes[id] = {
+      reachable: true, version, dashboard, users, error: null, ts: Date.now(), busy: false,
+    };
+  } catch (e) {
+    state.serverProbes[id] = { reachable: false, error: String(e), ts: Date.now(), busy: false };
+  }
+  render();
+}
+
+function renderServerDetail(host) {
+  const s = state.servers.find((x) => x.id === state.activeId);
+  if (!s) {
+    host.append(el("div", { class: "empty" }, "Server not found."));
+    return;
+  }
+  const probe = state.serverProbes[s.id] || {};
+
+  host.append(
+    el("div", { class: "row", style: "justify-content: space-between; align-items: flex-start" },
+      el("div", {},
+        el("h1", { class: "h1" }, s.label),
+        el("p", { class: "subtitle" }, s.base_url),
+      ),
+      el("div", { class: "row" },
+        statusPill(probe),
+        el("button", { class: "smallbtn", onclick: () => refreshServer(s.id), disabled: !!probe.busy }, probe.busy ? "Refreshing…" : "Refresh"),
+        el("button", { class: "ghost", onclick: () => openEditServer(s) }, "Edit"),
+        el("button", { class: "ghost", onclick: () => openDeleteServer(s) }, "Remove"),
+      ),
+    ),
+  );
+
+  // Tabs
+  host.append(el("div", { class: "row" },
+    tab("overview", "Overview"),
+    tab("users", "Users"),
+  ));
+
+  if (state.serverDetailTab === "overview") {
+    renderServerOverview(host, s, probe);
+  } else if (state.serverDetailTab === "users") {
+    renderServerUsers(host, s, probe);
+  }
+}
+
+function tab(key, label) {
+  const active = state.serverDetailTab === key;
+  return el("button", {
+    class: active ? "primary" : "smallbtn",
+    onclick: () => { state.serverDetailTab = key; render(); },
+  }, label);
+}
+
+function statusPill(probe) {
+  if (probe.busy) return el("div", { class: "pill warn" }, "Probing…");
+  if (probe.reachable) return el("div", { class: "pill ok" }, "Reachable");
+  if (probe.error)     return el("div", { class: "pill bad" }, "Unreachable");
+  return el("div", { class: "pill" }, "Unknown");
+}
+
+function renderServerOverview(host, s, probe) {
+  if (!probe.reachable) {
+    host.append(el("div", { class: "card" },
+      el("div", { class: "cardtitle" }, "Cannot reach server"),
+      el("p", { class: "subtitle" }, probe.error || "No probe yet."),
+      el("p", { class: "subtitle" },
+        "Verify the admin endpoint is exposed (default localhost only). ",
+        "If admin is bound to localhost, you can SSH-tunnel: ",
+        el("code", {}, `ssh -L 9090:localhost:9090 user@host`),
+      ),
+    ));
+    return;
+  }
+  const v = probe.version || {};
+  const d = probe.dashboard || {};
+  host.append(el("div", { class: "card" },
+    el("div", { class: "cardtitle" }, "Build"),
+    el("div", { class: "kv" },
+      kvRow("Version", v.version || "—"),
+      kvRow("Commit",  v.commit  || "—"),
+      kvRow("Built",   v.date    || "—"),
+    ),
+  ));
+  if (d && Object.keys(d).length) {
+    host.append(el("div", { class: "card" },
+      el("div", { class: "cardtitle" }, "Snapshot"),
+      el("div", { class: "kv" },
+        ...Object.entries(d).flatMap(([k, val]) => kvRow(prettyKey(k), formatValue(val))),
+      ),
+    ));
+  }
+}
+
+function renderServerUsers(host, s, probe) {
+  if (!probe.reachable) {
+    host.append(el("div", { class: "empty" }, "Connect to the server before managing users."));
+    return;
+  }
+  const users = probe.users || [];
+  host.append(el("div", { class: "row", style: "justify-content: space-between" },
+    el("div", { class: "subtitle" }, `${users.length} user${users.length === 1 ? "" : "s"}`),
+    el("button", { class: "primary", onclick: () => openAddUser(s) }, "+ Add user"),
+  ));
+  if (users.length === 0) {
+    host.append(el("div", { class: "card empty" }, "No users yet. Click +Add user to provision the first one."));
+    return;
+  }
+  const tbl = el("table", { class: "tbl" });
+  tbl.append(el("thead", {},
+    el("tr", {},
+      el("th", {}, "Name"),
+      el("th", {}, "Status"),
+      el("th", {}, "Quota"),
+      el("th", {}, "Used"),
+      el("th", {}, "Last seen"),
+      el("th", { class: "actions" }, ""),
+    ),
+  ));
+  const tbody = el("tbody");
+  for (const u of users) {
+    const status = u.status || "active";
+    const pillClass = status === "active" ? "ok" : (status === "revoked" ? "bad" : "warn");
+    tbody.append(el("tr", {},
+      el("td", {}, u.name || u.id, el("div", { class: "id" }, u.id)),
+      el("td", {}, el("span", { class: "pill " + pillClass }, status)),
+      el("td", {}, fmtQuota(u.quota_bytes_per_month)),
+      el("td", {}, fmtBytes(u.used_bytes_current_month || 0)),
+      el("td", {}, u.last_seen || "—"),
+      el("td", { class: "actions" },
+        el("button", { class: "ghost", onclick: () => openShareLink(s, u) }, "Share link"),
+        el("button", { class: "ghost", onclick: () => deleteUser(s, u) }, "Delete"),
+      ),
+    ));
+  }
+  tbl.append(tbody);
+  host.append(el("div", { class: "card", style: "padding: 0; overflow: hidden" }, tbl));
+}
+
+// --- Server CRUD modals ---
+
+function openAddServer() {
+  openModal({
+    title: "Add server",
+    body: "Point at an existing Veil server's admin endpoint. The server must expose /api over HTTP Basic.",
+    fields: [
+      { key: "label",     label: "Name",          placeholder: "Production EU" },
+      { key: "base_url",  label: "Admin URL",     placeholder: "https://veil.example.com:9090" },
+      { key: "basic_user",label: "Admin user",    placeholder: "admin" },
+      { key: "basic_pass",label: "Admin password",placeholder: "", secret: true },
+    ],
+    submitLabel: "Add",
+    onSubmit: async (vals) => {
+      if (!vals.label || !vals.base_url || !vals.basic_user) throw new Error("All fields required");
+      const id = String(Date.now());
+      state.servers.push({
+        id, label: vals.label, base_url: vals.base_url.replace(/\/$/, ""),
+        basic_user: vals.basic_user, basic_pass: vals.basic_pass || "",
+      });
+      state.activeId = id;
+      state.view = "server-detail";
+      await persistServers();
+      toast(`Added ${vals.label}.`, "info");
+      render();
+      refreshServer(id);
+    },
+  });
+}
+
+function openEditServer(s) {
+  openModal({
+    title: "Edit server",
+    fields: [
+      { key: "label",      label: "Name",          initial: s.label },
+      { key: "base_url",   label: "Admin URL",     initial: s.base_url },
+      { key: "basic_user", label: "Admin user",    initial: s.basic_user },
+      { key: "basic_pass", label: "Admin password",initial: s.basic_pass, secret: true },
+    ],
+    submitLabel: "Save",
+    onSubmit: async (vals) => {
+      Object.assign(s, {
+        label: vals.label || s.label,
+        base_url: (vals.base_url || s.base_url).replace(/\/$/, ""),
+        basic_user: vals.basic_user || s.basic_user,
+        basic_pass: vals.basic_pass ?? s.basic_pass,
+      });
+      await persistServers();
+      toast("Saved.", "info");
+      render();
+      refreshServer(s.id);
+    },
+  });
+}
+
+function openDeleteServer(s) {
+  openModal({
+    title: "Remove server",
+    body: `Remove "${s.label}" from this installer? The remote server itself stays running; only the saved profile is dropped.`,
+    submitLabel: "Remove",
+    danger: true,
+    onSubmit: async () => {
+      state.servers = state.servers.filter((x) => x.id !== s.id);
+      state.activeId = state.servers[0]?.id ?? null;
+      state.view = state.activeId ? "server-detail" : "servers";
+      await persistServers();
+      toast("Removed.", "info");
+      render();
+    },
+  });
+}
+
+// --- User actions ---
+
+function openAddUser(s) {
+  openModal({
+    title: "Add user",
+    body: "Server generates a fresh keypair when the public key is left blank. The private half is shown once on the next screen so you can hand it to the user.",
+    fields: [
+      { key: "name",       label: "Name",                   placeholder: "alice" },
+      { key: "pubkey_b64", label: "Public key (optional)",  placeholder: "leave blank to auto-generate" },
+    ],
+    submitLabel: "Create",
+    onSubmit: async (vals) => {
+      if (!vals.name) throw new Error("Name is required");
+      const creds = { base_url: s.base_url, username: s.basic_user, password: s.basic_pass };
+      const out = await invoke("admin_user_add", {
+        args: { creds, name: vals.name, pubkey_b64: vals.pubkey_b64 || null },
+      });
+      toast(`Created ${vals.name}.`, "success");
+      refreshServer(s.id);
+      // If server returned the inline private key, show it.
+      const priv = out?.privkey_b64 || out?.private_key_b64;
+      if (priv) {
+        openShareLinkComposer(s, out, priv);
+      }
+    },
+  });
+}
+
+function openShareLink(s, u) {
+  // We can't fully assemble a share-link without the user's private
+  // key (server doesn't keep one). Offer a partial preview + a
+  // 'rotate key' button that re-creates the user with a fresh
+  // keypair and emits the full link.
+  openModal({
+    title: `Share link for ${u.name}`,
+    body: "The server does not retain user private keys. To emit a fully self-contained veil:// link you need to rotate the key — the user's existing client will need to re-import the new link.",
+    fields: [],
+    submitLabel: "Rotate key + emit link",
+    onSubmit: async () => {
+      const creds = { base_url: s.base_url, username: s.basic_user, password: s.basic_pass };
+      // Server-side rotate isn't directly exposed via REST; fallback:
+      // delete + re-add with same name.
+      await invoke("admin_user_delete", { args: { creds, id: u.id } });
+      const out = await invoke("admin_user_add", {
+        args: { creds, name: u.name, pubkey_b64: null },
+      });
+      const priv = out?.privkey_b64 || out?.private_key_b64;
+      if (priv) {
+        openShareLinkComposer(s, out, priv);
+      } else {
+        toast("User recreated, but server did not return inline private key.", "info");
+      }
+      refreshServer(s.id);
+    },
+  });
+}
+
+function openShareLinkComposer(s, user, privB64) {
+  // Build the share link client-side from the server profile + the
+  // freshly-issued private key. The server's static pubkey is in the
+  // probe / dashboard; if missing, the operator has to type it once.
+  const probe = state.serverProbes[s.id] || {};
+  const serverPub = (probe.dashboard && (probe.dashboard.server_pubkey_b64 || probe.dashboard.static_pubkey_b64)) || "";
+
+  openModal({
+    title: "Share link",
+    body: "Hand this single string to the user; they paste it into the desktop / mobile client.",
+    fields: [
+      { key: "server_pubkey", label: "Server static pubkey (base64)", initial: serverPub },
+      { key: "addr",          label: "Server host:port",              placeholder: "vps.example.com:443" },
+      { key: "transport",     label: "Transport",                     initial: "reality" },
+      { key: "sni",           label: "TLS SNI (Reality / WSS)",       initial: "www.microsoft.com" },
+    ],
+    submitLabel: "Generate",
+    onSubmit: async (vals) => {
+      const cfg = {
+        Servers: [{
+          Type: vals.transport, Addr: vals.addr,
+          SNI: vals.sni || "", Insecure: null, Path: "", Fingerprint: "chrome",
+        }],
+        ServerStaticKeyB64: vals.server_pubkey,
+        StaticKeyPath: "",
+        StaticKeyInlineB64: privB64,
+        SOCKS5Listen: "127.0.0.1:1080",
+        Decoy: { Enabled: false, Region: "", Concurrency: 0, IntervalMS: 0, ShardSize: 0, Fingerprint: "" },
+        Mimicry: "",
+      };
+      const link = "veil://" + b64url(JSON.stringify(cfg));
+      const input = el("input", {
+        type: "text",
+        readonly: "",
+        onclick: (ev) => ev.target.select(),
+      });
+      input.value = link;
+      const copyBtn = el("button", { class: "smallbtn", onclick: () => {
+        input.select();
+        try { document.execCommand("copy"); toast("Copied.", "success"); }
+        catch (e) { toast("Copy failed: select the text and Ctrl-C.", "error"); }
+      } }, "Copy");
+      openModal({
+        title: `Link for ${user.name || user.id}`,
+        body: "Click the field to select all, then Ctrl-C — or use the Copy button.",
+        bodyExtra: el("div", { style: "display:flex; gap:8px; align-items:center" }, input, copyBtn),
+        submitLabel: "Done",
+        cancelLabel: null,
+        onSubmit: () => {},
+      });
+      // auto-select on open so Ctrl-C works without an extra click
+      setTimeout(() => input.select(), 50);
+    },
+  });
+}
+
+async function deleteUser(s, u) {
+  openModal({
+    title: "Delete user",
+    body: `Permanently delete "${u.name}"? The user's existing share-link will stop working.`,
+    submitLabel: "Delete",
+    danger: true,
+    onSubmit: async () => {
+      const creds = { base_url: s.base_url, username: s.basic_user, password: s.basic_pass };
+      await invoke("admin_user_delete", { args: { creds, id: u.id } });
+      toast("Deleted.", "info");
+      refreshServer(s.id);
+    },
+  });
+}
+
+// --- Deploy index ---
+
+function renderDeployIndex(host) {
+  host.append(
+    el("h1", { class: "h1" }, "Deploy a server"),
+    el("p", { class: "subtitle" }, "Pick the workflow that matches where you want Veil to live."),
+    el("div", { class: "choicegrid" },
+      choiceCard("Docker", "compose.yaml + bring-up", "deploy-compose"),
+      choiceCard("VPS via SSH", "Push veil + systemd unit + start", "deploy-ssh"),
+      choiceCard("Edge function", "Deno Deploy / Fly.io worker bundle", "deploy-edge"),
+    ),
+  );
+}
+
+function choiceCard(name, body, view) {
+  return el("button", { class: "choice", onclick: () => { state.view = view; render(); } },
+    el("div", { class: "name" }, name),
+    el("div", { class: "body" }, body),
+  );
+}
+
+// --- Compose deploy ---
+
+function renderDeployCompose(host) {
+  host.append(
+    el("h1", { class: "h1" }, "Docker compose"),
+    el("p", { class: "subtitle" }, "Generate a docker-compose.yaml ready to scp + ", el("code", {}, "docker compose up"), "."),
+    el("div", { class: "card" },
+      el("label", { class: "fieldlabel", for: "compose" }, "compose.yaml"),
+      el("textarea", {
+        id: "compose",
+        spellcheck: "false",
+        oninput: (ev) => { state.deploy.composeYaml = ev.target.value; },
+      }, ""),
+      el("div", { class: "row right" },
+        el("button", { class: "smallbtn", onclick: () => { state.deploy.composeYaml = defaultComposeYaml(); render(); } }, "Reset"),
+        el("button", { class: "primary", onclick: saveCompose }, "Save…"),
+      ),
+    ),
+  );
+  // After append the textarea exists; set its value (for first paint
+  // since DOM creation doesn't honour textarea innerText for value).
+  setTimeout(() => {
+    const ta = document.getElementById("compose");
+    if (ta) ta.value = state.deploy.composeYaml;
+  }, 0);
+}
+
+async function saveCompose() {
+  try {
+    await invoke("save_compose", { content: state.deploy.composeYaml });
+    toast("Saved.", "success");
+  } catch (e) {
+    toast("Save failed: " + e, "error");
+  }
+}
+
+// --- SSH deploy ---
+
+function renderDeploySSH(host) {
+  const ssh = state.deploy.ssh;
+  host.append(
+    el("h1", { class: "h1" }, "Install via SSH"),
+    el("p", { class: "subtitle" }, "Connect to a fresh VPS, push the Veil binary, install systemd unit and bring the service up."),
+  );
+
+  host.append(el("div", { class: "card" },
+    el("div", { class: "cardtitle" }, "Connection"),
+    el("div", { class: "row" },
+      sshField("host", "Host or IP", ssh.host, "vps.example.com"),
+      sshField("port", "Port",       ssh.port, "22"),
+    ),
+    el("div", { class: "row" },
+      sshField("user", "User",       ssh.user, "root"),
+      sshField("password", "Password", ssh.password, "••••••", true),
+    ),
+    el("div", { class: "row right" },
+      el("button", { class: "smallbtn", disabled: ssh.busy, onclick: sshProbe }, "Probe"),
+      el("button", { class: "primary",  disabled: ssh.busy, onclick: sshInstall }, "Install"),
+    ),
+    ssh.probe ? el("pre", { class: "log" }, JSON.stringify(ssh.probe, null, 2)) : null,
+  ));
+
+  if (ssh.log.length) {
+    host.append(el("div", { class: "card" },
+      el("div", { class: "cardtitle" }, "Install log"),
+      el("pre", { class: "log" }, ssh.log.join("\n")),
+    ));
+  }
+}
+
+function sshField(key, label, value, placeholder, secret = false) {
+  const wrap = el("div", { style: "flex: 1 1 200px" });
+  wrap.append(el("label", { class: "fieldlabel" }, label));
+  wrap.append(el("input", {
+    type: secret ? "password" : "text",
+    placeholder, value: value || "",
+    oninput: (ev) => { state.deploy.ssh[key] = ev.target.value; },
+  }));
+  return wrap;
+}
+
+async function sshProbe() {
+  state.deploy.ssh.busy = true; render();
+  try {
+    state.deploy.ssh.probe = await invoke("ssh_probe", {
+      target: { host: state.deploy.ssh.host, port: parseInt(state.deploy.ssh.port, 10) || 22, user: state.deploy.ssh.user, password: state.deploy.ssh.password },
+    });
+    toast("Probe ok.", "success");
+  } catch (e) {
+    toast("Probe failed: " + e, "error");
+  } finally {
+    state.deploy.ssh.busy = false; render();
+  }
+}
+
+async function sshInstall() {
+  toast("SSH install requires a release-built veil binary path; left as scaffolding for the v0 GUI. Use `veil` CLI from your shell or trigger the SSH workflow from the original installer release.", "info");
+}
+
+// --- Edge deploy ---
+
+function renderDeployEdge(host) {
+  const e = state.deploy.edge;
+  host.append(
+    el("h1", { class: "h1" }, "Edge worker"),
+    el("p", { class: "subtitle" }, "Generate a deploy bundle for Deno Deploy or Fly.io. Optionally push it directly via a paste-in PAT."),
+  );
+  host.append(el("div", { class: "card" },
+    el("div", { class: "row" },
+      el("div", { style: "flex:1" },
+        el("label", { class: "fieldlabel" }, "Provider"),
+        el("select", { onchange: (ev) => { state.deploy.edge.provider = ev.target.value; render(); } },
+          opt("deno", "Deno Deploy", e.provider === "deno"),
+          opt("fly",  "Fly.io",       e.provider === "fly"),
+        ),
+      ),
+      el("div", { style: "flex:1" },
+        el("label", { class: "fieldlabel" }, "Origin host"),
+        el("input", { type: "text", value: e.origin_host, placeholder: "vps.example.com",
+          oninput: (ev) => { state.deploy.edge.origin_host = ev.target.value; } }),
+      ),
+      el("div", { style: "flex:1" },
+        el("label", { class: "fieldlabel" }, "Origin port"),
+        el("input", { type: "text", value: e.origin_port, placeholder: "443",
+          oninput: (ev) => { state.deploy.edge.origin_port = ev.target.value; } }),
+      ),
+      el("div", { style: "flex:1" },
+        el("label", { class: "fieldlabel" }, "Path"),
+        el("input", { type: "text", value: e.path, placeholder: "/ws",
+          oninput: (ev) => { state.deploy.edge.path = ev.target.value; } }),
+      ),
+      e.provider === "fly" ? el("div", { style: "flex:1" },
+        el("label", { class: "fieldlabel" }, "App name"),
+        el("input", { type: "text", value: e.app_name, placeholder: "veil-edge",
+          oninput: (ev) => { state.deploy.edge.app_name = ev.target.value; } }),
+      ) : null,
+    ),
+    el("div", { class: "row right" },
+      el("button", { class: "smallbtn", onclick: edgeGenerate }, "Generate bundle"),
+      el("button", { class: "primary",  onclick: edgeSave, disabled: !e.files }, "Save to folder…"),
+    ),
+  ));
+  if (e.files) {
+    const items = Object.keys(e.files).map((name) =>
+      el("li", {}, el("code", {}, name), " (", e.files[name].length.toString(), " bytes)"),
+    );
+    host.append(el("div", { class: "card" },
+      el("div", { class: "cardtitle" }, "Files"),
+      el("ul", { style: "margin:0; padding-left:18px" }, ...items),
+    ));
+  }
+}
+
+async function edgeGenerate() {
+  const e = state.deploy.edge;
+  try {
+    state.deploy.edge.files = await invoke("edge_generate", {
+      params: {
+        provider: e.provider,
+        origin_host: e.origin_host,
+        origin_port: parseInt(e.origin_port, 10) || 443,
+        path: e.path,
+        app_name: e.app_name,
+      },
+    });
+    toast("Bundle generated.", "success");
+  } catch (err) {
+    toast("Generate failed: " + err, "error");
+  }
+  render();
+}
+
+async function edgeSave() {
+  try {
+    const dir = await invoke("edge_save", { files: state.deploy.edge.files });
+    if (dir) toast("Saved to " + dir, "success");
+  } catch (err) {
+    toast("Save failed: " + err, "error");
+  }
+}
+
+// --- Settings ---
+
+function renderSettings(host) {
+  host.append(
+    el("h1", { class: "h1" }, "About"),
+    el("div", { class: "card" },
+      el("div", { class: "cardtitle" }, "Veil Installer"),
+      el("p", { class: "subtitle" },
+        "GUI for deploying and managing Veil VPN servers. ",
+        "All saved server credentials live in tauri-plugin-store on this machine and never leave it.",
+      ),
+      el("div", { class: "kv" },
+        kvRow("Config", "installer.store.json (per-OS app data dir)"),
+        kvRow("Source", el("a", { href: "https://github.com/redstone-md/veil", target: "_blank" }, "github.com/redstone-md/veil")),
+      ),
+    ),
+  );
+}
+
+// --- Modal ---
+
+function openModal(opts) {
+  state.modal = { ...opts, _values: {} };
+  for (const f of opts.fields || []) state.modal._values[f.key] = f.initial ?? "";
+  render();
+  setTimeout(() => {
+    const first = document.querySelector(".modal-card input, .modal-card textarea");
+    if (first) first.focus();
+  }, 0);
+}
+function closeModal() { state.modal = null; render(); }
+
+function modalEl(m) {
+  const fields = (m.fields || []).map((f) => {
+    const props = {
+      type: f.secret ? "password" : "text",
+      placeholder: f.placeholder || "",
+      oninput: (ev) => { m._values[f.key] = ev.target.value; },
+      onkeydown: (ev) => {
+        if (ev.key === "Escape") closeModal();
+        if (ev.key === "Enter") { ev.preventDefault(); submit(); }
+      },
+    };
+    const input = el("input", props);
+    input.value = m._values[f.key] || "";
+    return el("div", { class: "modal-field" },
+      el("label", { class: "fieldlabel" }, f.label),
+      input,
+    );
+  });
+
+  const submit = async () => {
+    try {
+      const r = m.onSubmit(m._values);
+      if (r && typeof r.then === "function") await r;
+    } catch (e) {
+      toast(String(e?.message || e), "error");
+      return;
+    }
+    // If onSubmit opened ANOTHER modal (chained flow — e.g. rotate
+    // -> composer -> link), state.modal now points to the new one.
+    // Auto-closing here would wipe it; only close when our modal is
+    // still on top.
+    if (state.modal === m) closeModal();
+  };
+
+  const card = el("div", { class: "modal-card" },
+    el("div", { class: "modal-title" }, m.title),
+    m.body ? el("div", { class: "modal-body" }, m.body) : null,
+    m.bodyExtra || null,
+    ...fields,
+    el("div", { class: "modal-actions" },
+      m.cancelLabel === null ? null
+        : el("button", { class: "smallbtn", onclick: closeModal }, m.cancelLabel || "Cancel"),
+      el("button", { class: m.danger ? "danger" : "primary", onclick: submit }, m.submitLabel || "OK"),
+    ),
+  );
+  return el("div", { class: "modal-backdrop", onclick: (ev) => { if (ev.target === ev.currentTarget) closeModal(); } }, card);
+}
+
+// --- toast ---
+
+function toast(text, kind = "info") {
+  state.toast = { text, kind };
+  render();
+  setTimeout(() => {
+    if (state.toast?.text === text) { state.toast = null; render(); }
+  }, 4500);
+}
+function toastEl(t) { return el("div", { class: "toast " + t.kind }, t.text); }
+
+// --- helpers ---
+
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+    else throw new Error("clipboard unavailable");
+    toast("Copied.", "success");
+  } catch (e) {
+    toast("Copy failed: " + e, "error");
+  }
+}
+
+function b64url(s) {
+  const b = btoa(unescape(encodeURIComponent(s)));
+  return b.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B","KB","MB","GB","TB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i ? 1 : 0)} ${u[i]}`;
+}
+function fmtQuota(n) {
+  if (!n) return "unlimited";
+  return fmtBytes(n) + "/mo";
+}
+function prettyKey(k) {
+  return k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+function formatValue(v) {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
+function defaultComposeYaml() {
+  return `version: "3.9"
+services:
+  veil:
+    image: ghcr.io/redstone-md/veil:latest
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - veil-state:/var/lib/veil
+      - ./server.yaml:/etc/veil/server.yaml:ro
+volumes:
+  veil-state: {}
+`;
+}
+
+// --- DOM ---
 
 function el(tag, props = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(props)) {
     if (k === "class") e.className = v;
-    else if (k === "html") e.innerHTML = v;
     else if (k.startsWith("on")) e.addEventListener(k.slice(2).toLowerCase(), v);
+    else if (v === false || v === null || v === undefined) continue;
+    else if (v === true) e.setAttribute(k, "");
     else e.setAttribute(k, v);
   }
   for (const c of children) {
-    if (c == null) continue;
-    e.append(typeof c === "string" ? document.createTextNode(c) : c);
+    if (c == null || c === false) continue;
+    if (Array.isArray(c)) for (const cc of c) e.append(typeof cc === "string" ? document.createTextNode(cc) : cc);
+    else e.append(typeof c === "string" ? document.createTextNode(c) : c);
   }
   return e;
 }
 
-function nav(route) {
-  state.route = route;
-  render();
+function kvRow(k, v) {
+  return [el("div", { class: "k" }, k), el("div", { class: "v" }, v ?? "—")];
 }
 
-function renderHome() {
-  root.append(
-    el("h1", {}, "Veil installer"),
-    el("p", { class: "subtitle" }, "Choose how you want to deploy your server."),
-    el("div", { class: "choice-grid" },
-      choice("Docker", "Generate a docker-compose.yml you can scp to a host with Docker installed.", () => nav("docker")),
-      choice("VPS via SSH", "Connect to a fresh VPS and install Veil via SSH end-to-end.", () => nav("ssh")),
-      choice("Edge function", "Generate a ready-to-deploy Deno Deploy or Fly.io edge worker.", () => nav("edge")),
-    ),
-    el("div", { class: "notice" },
-      el("strong", {}, "Pre-alpha. "),
-      "Docker, SSH, and Edge workflows all generate working artefacts. ",
-      "Direct OAuth push for Edge providers lands in Phase 3.8."
-    ),
-  );
+function opt(value, label, selected) {
+  const o = el("option", { value }, label);
+  if (selected) o.selected = true;
+  return o;
 }
 
-function choice(title, desc, onclick) {
-  return el("button", { class: "choice", onclick },
-    el("div", { class: "title" }, title),
-    el("div", { class: "desc" }, desc));
-}
-
-function renderDocker() {
-  const f = state.form;
-
-  const onChange = (key) => (ev) => { f[key] = ev.target.value; };
-
-  const fieldsCard = el("div", {},
-    el("h2", {}, "Server parameters"),
-    field("Public host name (e.g. vps.example.com)", "domain", f.domain || "", onChange("domain")),
-    field("Reality target SNI (real domain to splice probes to)", "target_sni", f.target_sni || "www.cloudflare.com", onChange("target_sni")),
-    field("Admin email (for ACME / Let's Encrypt)", "email", f.email || "", onChange("email")),
-    field("Veil container image", "image", f.image || "ghcr.io/redstone-md/veil:dev", onChange("image")),
-  );
-
-  const out = el("textarea", { readonly: "" });
-  out.value = generateCompose(f);
-
-  const actions = el("div", { class: "actions" },
-    el("button", { onclick: () => nav("home") }, "← Back"),
-    el("div", { class: "spacer" }),
-    el("button", { onclick: () => { out.value = generateCompose(f); } }, "Regenerate"),
-    el("button", { class: "primary", onclick: () => copy(out.value) }, "Copy"),
-    el("button", { onclick: () => save(out.value) }, "Save…"),
-  );
-
-  // Re-render output on every input change.
-  fieldsCard.querySelectorAll("input").forEach(inp => {
-    inp.addEventListener("input", () => { out.value = generateCompose(f); });
-  });
-
-  root.append(
-    el("h1", {}, "Docker compose"),
-    el("p", { class: "subtitle" }, "Fill in the server parameters; the compose file regenerates as you type."),
-    fieldsCard,
-    el("h2", {}, "compose.yaml"),
-    out,
-    actions,
-  );
-}
-
-function field(label, name, value, oninput) {
-  const wrap = el("div");
-  wrap.append(
-    el("label", { for: name }, label),
-    el("input", { name, value, oninput }),
-  );
+function tbIcon(kind) {
+  const wrap = document.createElement("span");
+  wrap.style.display = "inline-flex";
+  const svgs = {
+    min:   `<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2"><line x1="2.5" y1="6" x2="9.5" y2="6"/></svg>`,
+    max:   `<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2.5" y="2.5" width="7" height="7" rx="0.5"/></svg>`,
+    close: `<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.2"><line x1="3" y1="3" x2="9" y2="9"/><line x1="9" y1="3" x2="3" y2="9"/></svg>`,
+  };
+  wrap.innerHTML = svgs[kind] || "";
   return wrap;
 }
 
-function generateCompose(f) {
-  const domain    = f.domain    || "vps.example.com";
-  const targetSNI = f.target_sni || "www.cloudflare.com";
-  const email     = f.email     || "ops@example.com";
-  const image     = f.image     || "ghcr.io/redstone-md/veil:dev";
-  return `# Generated by veil-installer.
-# Drop this onto a host with Docker installed and run:
-#   docker compose up -d
-#
-# Then create your admin login and add at least one user:
-#   docker compose exec veil veil admin user-create --db /var/lib/veil/users.db --username root
-#   docker compose exec veil veil user add --db /var/lib/veil/users.db --name alice --pubkey '<paste>'
-
-services:
-  veil:
-    image: ${image}
-    container_name: veil
-    restart: unless-stopped
-    ports:
-      - "443:443/tcp"   # Reality / WSS
-      - "443:443/udp"   # QUIC (same port, different protocol)
-    volumes:
-      - veil-state:/var/lib/veil
-      - ./server.yaml:/etc/veil/server.yaml:ro
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/veil", "version"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-
-volumes:
-  veil-state:
-
-# ---------- write the file below as ./server.yaml ----------
-#
-# transports:
-#   - type: reality
-#     listen: "0.0.0.0:443"
-#     target_sni: "${targetSNI}"
-#     target_addr: "${targetSNI}:443"
-#     domain:     "${domain}"
-#
-# acme:
-#   email:     "${email}"
-#   cache_dir: "/var/lib/veil/acme"
-#
-# static_key_path: "/var/lib/veil/server.key"
-# user_db_path:    "/var/lib/veil/users.db"
-`;
-}
-
-function renderEdge() {
-  const f = state.form;
-  const onChange = (key) => (ev) => { f[key] = ev.target.value; };
-
-  if (!f.provider) f.provider = "deno";
-
-  const providerSelect = el("div", {},
-    el("label", {}, "Edge provider"),
-    (() => {
-      const sel = el("select", { onchange: (ev) => { f.provider = ev.target.value; render(); } },
-        el("option", { value: "deno" }, "Deno Deploy"),
-        el("option", { value: "fly" }, "Fly.io"),
-      );
-      sel.value = f.provider;
-      return sel;
-    })(),
-  );
-
-  const cfgBlock = el("div", {},
-    el("h2", {}, "Origin (your Veil server)"),
-    field("Origin host (the VPS the edge worker forwards to)", "origin_host", f.origin_host || "", onChange("origin_host")),
-    field("Origin port", "origin_port", f.origin_port || "443", onChange("origin_port")),
-    field("URL path on the edge", "edge_path", f.edge_path || "/api/sync", onChange("edge_path")),
-    f.provider === "fly"
-      ? field("Fly.io app name", "app_name", f.app_name || "veil-edge", onChange("app_name"))
-      : null,
-  );
-
-  const status = el("div", { class: "notice", style: "display:none" });
-  const filesBox = el("div", {});
-
-  const generateBtn = el("button", { class: "primary", onclick: async () => {
-    status.style.display = "block";
-    status.textContent = "Generating worker bundle…";
-    filesBox.innerHTML = "";
-    try {
-      const params = {
-        provider: f.provider,
-        origin_host: (f.origin_host || "").trim(),
-        origin_port: parseInt(f.origin_port || "443", 10),
-        path: f.edge_path || "/ws",
-        app_name: f.app_name || null,
-      };
-      if (!params.origin_host) {
-        status.innerHTML = `<strong style="color:var(--red)">origin_host is required</strong>`;
-        return;
-      }
-      const files = await invoke("edge_generate", { params });
-      f._files = files;
-      status.innerHTML = `<strong>Bundle ready</strong> — ${Object.keys(files).length} files. ` +
-        `Save into a folder and follow <code>DEPLOY.md</code>.`;
-      for (const [name, content] of Object.entries(files)) {
-        const summary = el("summary", { style: "cursor:pointer;font-weight:600" }, name + `  (${content.length} B)`);
-        const pre = el("pre", { style: "white-space:pre-wrap;background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:0.5rem;font-family:JetBrains Mono,Consolas,monospace;font-size:0.8rem;max-height:240px;overflow:auto" });
-        pre.textContent = content;
-        const det = el("details", { style: "margin-top:0.4rem" }, summary, pre);
-        filesBox.append(det);
-      }
-    } catch (e) {
-      status.innerHTML = `<strong style="color:var(--red)">Generate failed:</strong> ${escape(String(e))}`;
-    }
-  }}, "Generate bundle");
-
-  const saveBtn = el("button", { onclick: async () => {
-    if (!f._files) {
-      status.style.display = "block";
-      status.textContent = "Generate the bundle first.";
-      return;
-    }
-    try {
-      const dir = await invoke("edge_save", { files: f._files });
-      if (!dir) return;
-      status.innerHTML = `<strong>Saved.</strong> Files written into <code>${escape(dir)}</code>.`;
-    } catch (e) {
-      status.innerHTML = `<strong style="color:var(--red)">Save failed:</strong> ${escape(String(e))}`;
-    }
-  }}, "Save bundle…");
-
-  root.append(
-    el("h1", {}, "Edge function"),
-    el("p", { class: "subtitle" }, "Generate a ready-to-deploy edge worker that proxies traffic to your origin Veil server."),
-    providerSelect,
-    cfgBlock,
-    el("div", { class: "actions" },
-      el("button", { onclick: () => nav("home") }, "← Back"),
-      el("div", { class: "spacer" }),
-      generateBtn,
-      saveBtn,
-    ),
-    status,
-    el("h2", {}, "Bundle contents"),
-    filesBox,
-    el("div", { class: "notice" },
-      "Generated bundle saved to disk so you can deploy it manually ",
-      "with ", el("code", {}, "deployctl deploy"), " or ",
-      el("code", {}, "fly deploy"), ", or paste a provider PAT below ",
-      "to push directly without leaving this window."
-    ),
-    el("h2", {}, "Direct deploy (paste a provider token)"),
-    renderDeployBox(f),
-  );
-}
-
-function renderDeployBox(f) {
-  const onChange = (key) => (ev) => { f[key] = ev.target.value; };
-  const status = el("div", { class: "notice", style: "display:none" });
-
-  const fields = el("div", {});
-  if (f.provider === "deno") {
-    fields.append(
-      field("Deno Deploy PAT (dash.deno.com → Account)", "deno_token", f.deno_token || "", onChange("deno_token")),
-      field("Project slug (created if missing)", "deno_project", f.deno_project || "", onChange("deno_project")),
-    );
-  } else {
-    fields.append(
-      field("Fly token (output of `fly auth token`)", "fly_token", f.fly_token || "", onChange("fly_token")),
-      field("App name (created if missing)", "fly_app", f.fly_app || "", onChange("fly_app")),
-      field("Org slug", "fly_org", f.fly_org || "personal", onChange("fly_org")),
-      field("Region (e.g. fra, ams, hel, sjc)", "fly_region", f.fly_region || "fra", onChange("fly_region")),
-      field("Image (default: ghcr.io/redstone-md/veil-edge:latest)", "fly_image", f.fly_image || "", onChange("fly_image")),
-    );
-  }
-
-  const deployBtn = el("button", { class: "primary", onclick: async () => {
-    status.style.display = "block";
-    status.textContent = "Deploying — this may take 10-30 seconds…";
-    try {
-      let result;
-      const port = parseInt(f.origin_port || "443", 10);
-      const path = f.edge_path || "/ws";
-      if (f.provider === "deno") {
-        if (!f.deno_token || !f.deno_project) { throw new Error("token and project are required"); }
-        result = await invoke("edge_deploy_deno", { params: {
-          token: f.deno_token,
-          project: f.deno_project,
-          origin_host: f.origin_host || "",
-          origin_port: port,
-          path,
-        }});
-      } else {
-        if (!f.fly_token || !f.fly_app) { throw new Error("token and app are required"); }
-        result = await invoke("edge_deploy_fly", { params: {
-          token: f.fly_token,
-          app: f.fly_app,
-          org: f.fly_org || "personal",
-          region: f.fly_region || "fra",
-          origin_host: f.origin_host || "",
-          origin_port: port,
-          path,
-          image: f.fly_image || null,
-        }});
-      }
-      status.innerHTML = `<strong>Deployed.</strong> URL: <code><a href="${escape(result.url)}" target="_blank">${escape(result.url)}</a></code><br/><span class="muted">${escape(result.note)}</span>`;
-    } catch (e) {
-      status.innerHTML = `<strong style="color:var(--red)">Deploy failed:</strong> ${escape(String(e))}`;
-    }
-  }}, "Deploy");
-
-  return el("div", {},
-    fields,
-    el("div", { class: "actions", style: "margin-top:0.5rem" }, deployBtn),
-    status,
-  );
-}
-
-function renderSSH() {
-  const f = state.form;
-  const onChange = (key) => (ev) => { f[key] = ev.target.value; };
-
-  const credBlock = el("div", {},
-    el("h2", {}, "SSH credentials"),
-    field("Host (IP or DNS name)", "host", f.host || "", onChange("host")),
-    field("Port", "port", f.port || "22", onChange("port")),
-    field("Username", "username", f.username || "root", onChange("username")),
-    field("Password (or leave blank for key-based auth)", "password", f.password || "", onChange("password")),
-  );
-
-  if (!f.binary_source) f.binary_source = "release";
-  const binBlock = el("div", {},
-    el("h2", {}, "Veil binary source"),
-    el("label", {}, "Where to get the veil binary the installer uploads"),
-    (() => {
-      const sel = el("select", { onchange: (ev) => { f.binary_source = ev.target.value; } },
-        el("option", { value: "release" }, "Latest GitHub Release (recommended)"),
-        el("option", { value: "file" }, "Pick a local file"),
-      );
-      sel.value = f.binary_source;
-      return sel;
-    })(),
-  );
-
-  const cfgBlock = el("div", {},
-    el("h2", {}, "Veil server configuration"),
-    field("Public host name", "domain", f.domain || "", onChange("domain")),
-    field("Reality target SNI", "target_sni", f.target_sni || "www.cloudflare.com", onChange("target_sni")),
-    field("ACME email (Let's Encrypt; leave blank to use a self-signed cert)", "email", f.email || "", onChange("email")),
-  );
-
-  const status = el("div", { class: "notice", style: "display:none" });
-  const stepsBox = el("ol", {});
-
-  const probeBtn = el("button", { onclick: async () => {
-    status.style.display = "block";
-    status.textContent = "Probing host…";
-    try {
-      const target = sshTarget(f);
-      const result = await invoke("ssh_probe", { target });
-      status.innerHTML = `<strong>Probe OK</strong> (status ${result.status})<br/><pre style="white-space:pre-wrap;font-family:JetBrains Mono,Consolas,monospace;font-size:0.8rem;color:var(--muted);margin:0.5rem 0 0">${escape(result.stdout)}</pre>`;
-    } catch (e) {
-      status.innerHTML = `<strong style="color:var(--red)">Probe failed:</strong> ${escape(String(e))}`;
-    }
-  }}, "Probe host");
-
-  const installBtn = el("button", { class: "primary", onclick: async () => {
-    status.style.display = "block";
-    stepsBox.innerHTML = "";
-    try {
-      const target = sshTarget(f);
-
-      let veilBytes;
-      if (f.binary_source === "file") {
-        status.textContent = "Reading local veil binary…";
-        veilBytes = await pickVeilBinary();
-        if (!veilBytes) { status.textContent = "No binary chosen; aborting."; return; }
-      } else {
-        // Default: probe the host so we know its arch, then pull
-        // the matching asset from the latest GitHub Release.
-        status.textContent = "Probing host arch…";
-        const probe = await invoke("ssh_probe", { target });
-        if (probe.status !== 0) {
-          status.innerHTML = `<strong style="color:var(--red)">Probe failed (status ${probe.status})</strong>: ${escape(probe.stderr || probe.stdout)}`;
-          return;
-        }
-        const lines = probe.stdout.split(/\r?\n/);
-        const uname = lines[0] || "";
-        const osRelease = lines.slice(1).join("\n");
-        status.textContent = `Fetching veil-${uname}-* from GitHub Release…`;
-        veilBytes = await invoke("release_fetch_veil", {
-          params: { uname_m: uname, os_release_text: osRelease },
-        });
-      }
-
-      status.textContent = "Installing — this may take 10-15 seconds…";
-      const plan = {
-        target,
-        veil_binary_b64: veilBytes,
-        server_yaml: generateServerYAML(f),
-      };
-      const steps = await invoke("ssh_install", { plan });
-      status.innerHTML = `<strong>Install completed.</strong> See per-step results below.`;
-      for (const step of steps) {
-        const li = el("li", {});
-        li.innerHTML = `<strong style="color:${step.ok?'var(--green)':'var(--red)'}">${step.ok?'✓':'✗'}</strong> ${escape(step.label)}<br/><span class="muted" style="font-size:0.8rem;white-space:pre-wrap">${escape(step.detail)}</span>`;
-        stepsBox.append(li);
-      }
-    } catch (e) {
-      status.innerHTML = `<strong style="color:var(--red)">Install failed:</strong> ${escape(String(e))}`;
-    }
-  }}, "Install Veil");
-
-  root.append(
-    el("h1", {}, "VPS via SSH"),
-    el("p", { class: "subtitle" }, "Provision a fresh VPS over SSH: upload the binary, write the config, register a systemd unit, start the service."),
-    credBlock,
-    cfgBlock,
-    binBlock,
-    el("div", { class: "actions" },
-      el("button", { onclick: () => nav("home") }, "← Back"),
-      el("div", { class: "spacer" }),
-      probeBtn,
-      installBtn,
-    ),
-    status,
-    stepsBox,
-  );
-}
-
-// ---------- helpers ----------
-
-function sshTarget(f) {
-  return {
-    host: (f.host || "").trim(),
-    port: parseInt(f.port || "22", 10) || 22,
-    username: (f.username || "root").trim(),
-    password: f.password || null,
-    private_key_pem: null,
-    timeout_secs: 20,
-  };
-}
-
-function generateServerYAML(f) {
-  const targetSNI = f.target_sni || "www.cloudflare.com";
-  const acme = f.email
-    ? `acme:\n  email: "${f.email}"\n  cache_dir: "/var/lib/veil/acme"\n\n`
-    : "";
-  const domain = f.domain ? `    domain: "${f.domain}"\n` : "";
-  return `transports:
-  - type: reality
-    listen: "0.0.0.0:443"
-    target_sni: "${targetSNI}"
-    target_addr: "${targetSNI}:443"
-${domain}
-${acme}static_key_path: "/var/lib/veil/server.key"
-user_db_path:    "/var/lib/veil/users.db"
-`;
-}
-
-async function pickVeilBinary() {
-  // Pop a file picker and return base64 bytes. Tauri 2 dialog
-  // plugin returns a path; we then read via FileSystem plugin.
-  return new Promise(async (resolve) => {
-    const inp = document.createElement("input");
-    inp.type = "file";
-    inp.onchange = async () => {
-      const file = inp.files?.[0];
-      if (!file) { resolve(null); return; }
-      const buf = await file.arrayBuffer();
-      const bytes = new Uint8Array(buf);
-      let bin = "";
-      for (let i = 0; i < bytes.length; i += 1) bin += String.fromCharCode(bytes[i]);
-      resolve(btoa(bin));
-    };
-    inp.click();
-  });
-}
-
-function escape(s) {
-  return String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-}
-
-async function copy(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Fallback when clipboard API is unavailable in webview.
-    const ta = document.createElement("textarea");
-    ta.value = text; document.body.appendChild(ta); ta.select();
-    document.execCommand("copy"); document.body.removeChild(ta);
-  }
-}
-
-async function save(text) {
-  // The Tauri side exposes a `save_compose` command that opens a
-  // native file dialog and writes the result. When running outside
-  // Tauri (e.g. plain `vite` for UI iteration) we fall back to
-  // download via a Blob URL.
-  if (typeof invoke === "function" && typeof window.__TAURI__ !== "undefined") {
-    try {
-      await invoke("save_compose", { content: text });
-      return;
-    } catch (e) {
-      console.error(e);
-    }
-  }
-  const blob = new Blob([text], { type: "text/yaml" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = "compose.yaml"; a.click();
-  URL.revokeObjectURL(url);
-}
-
-render();
+bootStore();
