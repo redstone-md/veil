@@ -64,12 +64,18 @@ type ServerConfig struct {
 	// first run if absent.
 	StaticKeyPath string `yaml:"static_key_path"`
 
-	// AuthorizedKeysPath is the filesystem path to a list of
-	// client static public keys (one base64 per line) permitted
-	// to handshake with this server. In v0 this is the user
-	// management mechanism; later it is replaced by the embedded
-	// SQLite user store.
+	// AuthorizedKeysPath is the legacy authentication source: a
+	// flat file with one base64-encoded client public key per line.
+	// New deployments should use UserDBPath instead; this field
+	// remains supported as a fallback for existing setups and as
+	// the simplest possible single-file deployment.
 	AuthorizedKeysPath string `yaml:"authorized_keys_path"`
+
+	// UserDBPath is the SQLite-backed user store. When set, it
+	// supersedes AuthorizedKeysPath: clients are authenticated
+	// against the database, quotas are enforced, and the admin
+	// HTTP API operates on the same store.
+	UserDBPath string `yaml:"user_db_path"`
 }
 
 // ClientServer describes one reachable Veil server endpoint a client
@@ -190,8 +196,8 @@ func (c *ServerConfig) Validate() error {
 	if c.StaticKeyPath == "" {
 		return errors.New("server.static_key_path is required")
 	}
-	if c.AuthorizedKeysPath == "" {
-		return errors.New("server.authorized_keys_path is required")
+	if c.AuthorizedKeysPath == "" && c.UserDBPath == "" {
+		return errors.New("server.user_db_path or server.authorized_keys_path is required")
 	}
 	return nil
 }

@@ -14,14 +14,15 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
-	"strings"
 
 	"github.com/urfave/cli/v3"
 
+	"github.com/redstone-md/veil/core/internal/auth"
 	"github.com/redstone-md/veil/core/internal/config"
 	"github.com/redstone-md/veil/core/internal/crypto"
 	"github.com/redstone-md/veil/core/internal/forward"
@@ -30,6 +31,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/transport/quictr"
 	"github.com/redstone-md/veil/core/internal/transport/realitytr"
 	"github.com/redstone-md/veil/core/internal/transport/wsstr"
+	"github.com/redstone-md/veil/core/internal/users"
 )
 
 // Command returns the `veil serve` cli.Command.
@@ -66,11 +68,13 @@ func run(ctx context.Context, cfgPath string) error {
 		"public_key_b64", crypto.EncodePublicKey(staticKP.Public),
 	)
 
-	authorized, err := loadAuthorizedKeys(cfg.AuthorizedKeysPath)
+	authn, store, err := buildAuthenticator(cfg)
 	if err != nil {
 		return err
 	}
-	slog.Info("authorized client keys loaded", "count", len(authorized))
+	if store != nil {
+		defer store.Close()
+	}
 
 	fanIn := transport.NewFanIn(slog.Default())
 	for i, t := range cfg.Transports {
@@ -98,8 +102,29 @@ func run(ctx context.Context, cfgPath string) error {
 			slog.Error("accept failed", "err", err)
 			return err
 		}
-		go handleConn(ctx, conn, *staticKP, authorized)
+		go handleConn(ctx, conn, *staticKP, authn)
 	}
+}
+
+func buildAuthenticator(cfg *config.ServerConfig) (auth.Authenticator, *users.Store, error) {
+	if cfg.UserDBPath != "" {
+		store, err := users.Open(cfg.UserDBPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		count, _ := store.CountActive(context.Background())
+		slog.Info("user store opened", "path", cfg.UserDBPath, "active_users", count)
+		return auth.NewStoreBackend(store), store, nil
+	}
+	if cfg.AuthorizedKeysPath != "" {
+		fb, err := auth.LoadFile(cfg.AuthorizedKeysPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		slog.Info("authorized_keys loaded", "path", fb.Path(), "count", fb.Count())
+		return fb, nil, nil
+	}
+	return nil, nil, errors.New("no authenticator configured")
 }
 
 func buildListener(t config.ServerTransport, serverStaticPub []byte) (transport.Listener, error) {
@@ -152,7 +177,7 @@ func buildServerTLS(t config.ServerTransport) (*tls.Config, error) {
 	return wsstr.SelfSignedTLSConfig(host)
 }
 
-func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypair, authorized map[string]struct{}) {
+func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypair, authn auth.Authenticator) {
 	defer conn.Close()
 	logger := slog.With("peer", conn.RemoteAddr().String())
 
@@ -162,11 +187,17 @@ func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypai
 		return
 	}
 	peerB64 := base64.StdEncoding.EncodeToString(established.PeerStatic)
-	if _, ok := authorized[peerB64]; !ok {
-		logger.Warn("unauthorized client", "client_pubkey_b64", peerB64)
+	res, err := authn.Verify(ctx, peerB64)
+	if err != nil {
+		logger.Warn("auth rejected",
+			"client_pubkey_b64", peerB64, "err", err)
 		return
 	}
-	logger.Info("client authenticated", "client_pubkey_b64", peerB64)
+	logger = logger.With("user", res.Name)
+	if res.UserID != "" {
+		logger = logger.With("user_id", res.UserID)
+	}
+	logger.Info("client authenticated")
 
 	secure := session.NewSecureChannel(conn, established)
 	sess := session.New(secure, session.Options{Role: session.RoleServer, Logger: logger})
@@ -197,21 +228,5 @@ func handleConn(ctx context.Context, conn transport.Conn, staticKP crypto.Keypai
 	_ = sess.Close()
 }
 
-func loadAuthorizedKeys(path string) (map[string]struct{}, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read authorized keys: %w", err)
-	}
-	out := make(map[string]struct{})
-	for i, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if _, err := base64.StdEncoding.DecodeString(line); err != nil {
-			return nil, fmt.Errorf("authorized_keys line %d: invalid base64: %w", i+1, err)
-		}
-		out[line] = struct{}{}
-	}
-	return out, nil
-}
+// _ keeps the os import used even if the file is later trimmed.
+var _ = os.Args
