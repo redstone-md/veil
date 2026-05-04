@@ -11,8 +11,10 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/redstone-md/veil/core/internal/buildinfo"
+	cliadmin "github.com/redstone-md/veil/core/internal/cli/admin"
 	cliconnect "github.com/redstone-md/veil/core/internal/cli/connect"
 	cliserve "github.com/redstone-md/veil/core/internal/cli/serve"
+	cliuser "github.com/redstone-md/veil/core/internal/cli/user"
 )
 
 // NewApp constructs the CLI application with all subcommands registered.
@@ -24,6 +26,8 @@ func NewApp(version string) *cli.Command {
 		Commands: []*cli.Command{
 			cliserve.Command(),
 			cliconnect.Command(),
+			cliuser.Command(),
+			cliadmin.Command(),
 			versionCommand(),
 		},
 		EnableShellCompletion: true,
