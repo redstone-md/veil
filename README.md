@@ -78,8 +78,16 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       fall back to an unsigned build, present secrets sign +
       notarise. `docs/RELEASING.md` walks operators through
       the secret setup.
-- [ ] **Phase 3.9** — Direct OAuth push from the installer to
-      Deno Deploy / Fly.io APIs.
+- [x] **Phase 3.9 (direct edge deploy)** — installer pushes the
+      generated edge bundle straight to the provider's API via a
+      paste-in personal-access token. `installer/src-tauri/src/edge_deploy.rs`
+      drives Deno Deploy (`POST /v1/projects` + `/deployments`) and
+      Fly.io Machines (`POST /v1/apps` + `/machines`); two Tauri
+      commands (`edge_deploy_deno`, `edge_deploy_fly`) surface the
+      flow to the GUI, which adds a token + app input + deploy
+      button to the existing edge form. Token stays in process
+      memory for the duration of one API call (never written to
+      disk) — operator revokes from the provider dashboard after.
 - [x] **Phase 6.5 (distribution channels)** — release.yml now
       builds + pushes a multi-arch (`linux/amd64,linux/arm64`)
       Veil server image to `ghcr.io/redstone-md/veil:vX.Y.Z` and

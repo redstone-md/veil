@@ -265,11 +265,75 @@ function renderEdge() {
     el("h2", {}, "Bundle contents"),
     filesBox,
     el("div", { class: "notice" },
-      "v0 generates the worker source + a deploy recipe. Direct ",
-      "OAuth into Deno Deploy / Fly.io is on the Phase 3.8 roadmap; ",
-      "until then run ", el("code", {}, "deployctl deploy"), " or ",
-      el("code", {}, "fly deploy"), " yourself against the saved bundle."
+      "Generated bundle saved to disk so you can deploy it manually ",
+      "with ", el("code", {}, "deployctl deploy"), " or ",
+      el("code", {}, "fly deploy"), ", or paste a provider PAT below ",
+      "to push directly without leaving this window."
     ),
+    el("h2", {}, "Direct deploy (paste a provider token)"),
+    renderDeployBox(f),
+  );
+}
+
+function renderDeployBox(f) {
+  const onChange = (key) => (ev) => { f[key] = ev.target.value; };
+  const status = el("div", { class: "notice", style: "display:none" });
+
+  const fields = el("div", {});
+  if (f.provider === "deno") {
+    fields.append(
+      field("Deno Deploy PAT (dash.deno.com → Account)", "deno_token", f.deno_token || "", onChange("deno_token")),
+      field("Project slug (created if missing)", "deno_project", f.deno_project || "", onChange("deno_project")),
+    );
+  } else {
+    fields.append(
+      field("Fly token (output of `fly auth token`)", "fly_token", f.fly_token || "", onChange("fly_token")),
+      field("App name (created if missing)", "fly_app", f.fly_app || "", onChange("fly_app")),
+      field("Org slug", "fly_org", f.fly_org || "personal", onChange("fly_org")),
+      field("Region (e.g. fra, ams, hel, sjc)", "fly_region", f.fly_region || "fra", onChange("fly_region")),
+      field("Image (default: ghcr.io/redstone-md/veil-edge:latest)", "fly_image", f.fly_image || "", onChange("fly_image")),
+    );
+  }
+
+  const deployBtn = el("button", { class: "primary", onclick: async () => {
+    status.style.display = "block";
+    status.textContent = "Deploying — this may take 10-30 seconds…";
+    try {
+      let result;
+      const port = parseInt(f.origin_port || "443", 10);
+      const path = f.edge_path || "/ws";
+      if (f.provider === "deno") {
+        if (!f.deno_token || !f.deno_project) { throw new Error("token and project are required"); }
+        result = await invoke("edge_deploy_deno", { params: {
+          token: f.deno_token,
+          project: f.deno_project,
+          origin_host: f.origin_host || "",
+          origin_port: port,
+          path,
+        }});
+      } else {
+        if (!f.fly_token || !f.fly_app) { throw new Error("token and app are required"); }
+        result = await invoke("edge_deploy_fly", { params: {
+          token: f.fly_token,
+          app: f.fly_app,
+          org: f.fly_org || "personal",
+          region: f.fly_region || "fra",
+          origin_host: f.origin_host || "",
+          origin_port: port,
+          path,
+          image: f.fly_image || null,
+        }});
+      }
+      status.innerHTML = `<strong>Deployed.</strong> URL: <code><a href="${escape(result.url)}" target="_blank">${escape(result.url)}</a></code><br/><span class="muted">${escape(result.note)}</span>`;
+    } catch (e) {
+      status.innerHTML = `<strong style="color:var(--red)">Deploy failed:</strong> ${escape(String(e))}`;
+    }
+  }}, "Deploy");
+
+  return el("div", {},
+    fields,
+    el("div", { class: "actions", style: "margin-top:0.5rem" }, deployBtn),
+    status,
   );
 }
 

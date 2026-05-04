@@ -20,6 +20,7 @@ use serde::Deserialize;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
+mod edge_deploy;
 mod release;
 mod ssh;
 
@@ -170,6 +171,27 @@ async fn release_fetch_veil(params: FetchVeilParams) -> Result<String, String> {
     Ok(B64.encode(bytes))
 }
 
+/// Phase 3.9: deploy a generated edge bundle directly to the
+/// provider's API using a paste-in PAT. Returns the public URL
+/// the worker is reachable at.
+#[tauri::command]
+async fn edge_deploy_deno(
+    params: edge_deploy::DenoDeployParams,
+) -> Result<edge_deploy::DeployResult, String> {
+    edge_deploy::deploy_deno(params)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn edge_deploy_fly(
+    params: edge_deploy::FlyDeployParams,
+) -> Result<edge_deploy::DeployResult, String> {
+    edge_deploy::deploy_fly(params)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
 /// Save a generated edge bundle into a directory chosen by the
 /// operator via a native folder dialog.
 #[tauri::command]
@@ -208,6 +230,8 @@ pub fn run() {
             ssh_install,
             edge_generate,
             edge_save,
+            edge_deploy_deno,
+            edge_deploy_fly,
             release_latest,
             release_fetch_veil,
         ])
