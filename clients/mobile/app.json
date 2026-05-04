@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "Veil",
+    "slug": "veil-mobile",
+    "version": "0.0.1",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "backgroundColor": "#0d1117"
+    },
+    "ios": {
+      "bundleIdentifier": "org.veil.mobile",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
+    },
+    "android": {
+      "package": "org.veil.mobile",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.POST_NOTIFICATIONS"
+      ]
+    }
+  }
+}

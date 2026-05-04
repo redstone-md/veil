@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      App Group lets the host app and the tunnel extension share
+      a small slice of UserDefaults / file storage. Used to pass
+      the operator's profile blobs from the UI into the tunnel.
+    -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.org.veil.mobile</string>
+    </array>
+    <!-- Required for any process that vends a packet tunnel. -->
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>packet-tunnel-provider</string>
+    </array>
+</dict>
+</plist>

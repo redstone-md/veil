@@ -125,9 +125,21 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       decoy, notifications), persisted through `tauri-plugin-store`;
       in-app update check + apply that delegates to the bundled
       `veil update` CLI (new `--json` flag on `veil update check`).
-- [ ] **Phase 4.6** — Mobile clients (React Native +
-      NetworkExtension on iOS, VpnService on Android) and Node
-      NAPI bindings.
+- [x] **Phase 4.6 (mobile + Node bindings, scaffold)** —
+      `sdks/veil-node/` napi-rs crate that wraps `veil-rs` to ship
+      a `@veil/node` package (Veil class with start/stop/metrics +
+      ThreadsafeFunction-bridged event callback);
+      `clients/mobile/` Expo bare React Native app sharing the
+      desktop UX (status, profiles, settings, log) over a thin
+      `src/veil.js` native-bridge module;
+      `clients/mobile/android/` Kotlin `VeilVpnService` + RN
+      `VeilBridgeModule` handling the `VpnService.prepare()`
+      consent dance and forwarding events to JS;
+      `clients/mobile/ios/PacketTunnelProvider/` Swift
+      `NEPacketTunnelProvider` + `VeilSession` wrapper over the C
+      ABI through a bridging header. The platform-side `cgo` entry
+      points (`jni_android.go`, `ne_ios.go`) for TUN ingestion are
+      pending; tracked in the per-platform READMEs.
 - [x] **Phase 5 (hardening half)** — statistical mimicry profiles
       (browse / video / messaging / search) wired into the data path
       via packet padding + inter-arrival jitter; multi-listen per

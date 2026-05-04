@@ -1,0 +1,35 @@
+node_modules/
+.expo/
+dist/
+web-build/
+*.tsbuildinfo
+
+# iOS
+ios/Pods/
+ios/build/
+ios/*.xcworkspace/xcuserdata/
+ios/*.xcodeproj/xcuserdata/
+ios/*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.iml
+
+# Native build artefacts
+*.jks
+*.keystore
+*.so
+*.dylib
+*.dll
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

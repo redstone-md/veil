@@ -1,0 +1,24 @@
+{
+  "name": "veil-mobile",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Mobile (iOS + Android) Veil VPN client.",
+  "license": "Apache-2.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "expo": "~51.0.0",
+    "expo-status-bar": "~1.12.0",
+    "react": "18.2.0",
+    "react-native": "0.74.0",
+    "@react-native-async-storage/async-storage": "1.23.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "@veil/node",
+  "version": "0.0.1",
+  "description": "Node.js bindings for libveil (Veil VPN).",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/redstone-md/veil",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "node test/smoke.js"
+  },
+  "engines": {
+    "node": ">=14.16"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "napi": {
+    "name": "veil",
+    "triples": {
+      "defaults": true,
+      "additional": [
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "aarch64-unknown-linux-gnu"
+      ]
+    }
+  }
+}

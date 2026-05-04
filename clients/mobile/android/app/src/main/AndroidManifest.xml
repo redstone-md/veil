@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Veil Android — Manifest fragment.
+
+  Declares the foreground VpnService that backs the JS bridge plus
+  the standard React Native MainActivity. The Foreground service
+  type is `systemExempted` for VpnService compatibility on
+  API 34+; older devices ignore the attribute.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:label="@string/app_name"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|fontScale|smallestScreenSize|screenLayout|locale|layoutDirection"
+            android:launchMode="singleTask"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The VPN itself runs in this VpnService. Android requires
+          BIND_VPN_SERVICE to be enforced via android:permission so
+          only the system can launch it after the user grants the
+          VPN consent dialog.
+        -->
+        <service
+            android:name=".VeilVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="systemExempted"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>
