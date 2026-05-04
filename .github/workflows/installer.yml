@@ -77,16 +77,77 @@ jobs:
         working-directory: installer
         run: npm ci || npm install
 
+      # ---- Optional codesigning ---------------------------------
+      #
+      # When the corresponding repository secrets are configured the
+      # installer is signed and (for macOS) notarised. Each secret
+      # is opt-in: missing secrets cause the build to fall back to
+      # an unsigned artefact rather than failing.
+      #
+      # macOS:
+      #   APPLE_CERTIFICATE        base64-encoded .p12 of the
+      #                            Developer ID Application cert
+      #   APPLE_CERTIFICATE_PASSWORD  passphrase for the .p12
+      #   APPLE_SIGNING_IDENTITY   common name or hash of the cert
+      #                            (e.g. "Developer ID Application:
+      #                            Veil VPN (TEAMID)")
+      #   APPLE_ID                 Apple ID for notarytool
+      #   APPLE_ID_PASSWORD        app-specific password for that ID
+      #   APPLE_TEAM_ID            10-char team identifier
+      #
+      # Windows:
+      #   WINDOWS_CERTIFICATE      base64-encoded .pfx of the EV cert
+      #   WINDOWS_CERTIFICATE_PASSWORD  passphrase for the .pfx
+      #
+      # See docs/RELEASING.md §"Signing setup" for the full operator
+      # walkthrough.
+      - name: prep macOS keychain (signing)
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASS=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASS" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASS" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASS" build.keychain
+          rm -f /tmp/cert.p12
+
+      - name: prep Windows cert (signing)
+        if: runner.os == 'Windows' && env.WINDOWS_CERTIFICATE != ''
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        shell: bash
+        run: |
+          echo "$WINDOWS_CERTIFICATE" | base64 --decode > /tmp/cert.pfx
+          # Tauri picks the cert up via TAURI_WIN_CERT_PATH; a step
+          # below exports it as an env var on the build step.
+          echo "TAURI_WIN_CERT_PATH=/tmp/cert.pfx" >> "$GITHUB_ENV"
+
       - name: tauri build
         working-directory: installer
         env:
-          # The signing-key story is in docs/RELEASING.md; the
-          # release pipeline does not yet sign the installer
-          # artefacts because the macOS / Windows codesigning certs
-          # are operator-supplied and out of scope for the public
-          # CI workflow.
-          TAURI_SIGNING_PRIVATE_KEY: ""
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # macOS signing identity: empty == unsigned build.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows: tauri-bundler reads these for signtool.exe.
+          TAURI_WIN_CERT_PATH: ${{ env.TAURI_WIN_CERT_PATH }}
+          TAURI_WIN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          # Tauri auto-update signing (separate from codesigning):
+          # if a private key is configured the build emits
+          # `*.sig` files alongside each artefact for tauri-updater.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build -- --ci
 
       - uses: actions/upload-artifact@v4

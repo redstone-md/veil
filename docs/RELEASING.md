@@ -124,6 +124,61 @@ If a maintainer suspects compromise of the GitHub Actions identity
 3. Re-publish a signed checksum manifest covering the
    pre-incident releases so users can re-verify them out-of-band.
 
+## Signing setup (Tauri installer)
+
+The installer workflow (`.github/workflows/installer.yml`)
+auto-signs the macOS `.dmg`/`.app` and the Windows `.msi`/`.exe`
+artefacts when the corresponding repository secrets are present.
+Each secret is opt-in; missing secrets cause the build to fall
+back to an unsigned artefact rather than failing.
+
+### macOS (Developer ID + notarisation)
+
+Add these secrets at *Settings → Secrets and variables → Actions*:
+
+| Secret | What |
+|--------|------|
+| `APPLE_CERTIFICATE` | base64 of the Developer ID Application `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | passphrase for the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | common name of the cert (e.g. `Developer ID Application: Veil VPN (TEAMID)`) |
+| `APPLE_ID` | Apple ID for `notarytool` |
+| `APPLE_ID_PASSWORD` | app-specific password for that Apple ID |
+| `APPLE_TEAM_ID` | 10-character Apple team identifier |
+
+Encode the `.p12` for the secret with:
+
+```bash
+base64 -i ~/path/to/cert.p12 | pbcopy   # macOS
+# or
+openssl base64 -in cert.p12 -A          # cross-platform
+```
+
+### Windows (EV signing cert)
+
+| Secret | What |
+|--------|------|
+| `WINDOWS_CERTIFICATE` | base64 of the `.pfx` (EV preferred) |
+| `WINDOWS_CERTIFICATE_PASSWORD` | passphrase for the `.pfx` |
+
+The workflow writes the decoded `.pfx` to a temp file and points
+`tauri-bundler`'s `signtool.exe` invocation at it via
+`TAURI_WIN_CERT_PATH`.
+
+### Tauri auto-update signing (optional)
+
+If you ship the installer's own auto-update channel (separate
+from the `veil update` self-installer that the core binary
+ships with) the workflow looks for:
+
+| Secret | What |
+|--------|------|
+| `TAURI_SIGNING_PRIVATE_KEY` | output of `tauri signer generate` |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | passphrase for that key |
+
+Each artefact then lands with a matching `*.sig` next to it on the
+GitHub Release; tauri-updater on the client side verifies these
+signatures before applying an installer update.
+
 ## Distribution channels (planned)
 
 - **GitHub Releases** — primary; lands automatically via the
