@@ -112,9 +112,16 @@ func (f *FanInListener) Close() error {
 	return first
 }
 
-// FallbackDialer tries a sequence of backends in order, returning
-// the first connection that handshakes successfully. Failures are
-// reported but never fatal until every option is exhausted.
+// FallbackDialer races every configured backend in parallel and
+// returns the first connection that finishes handshake; the rest
+// are cancelled and torn down. Once a winner is picked it is held
+// for the lifetime of the session — no mid-flight transport
+// switching, since that would interrupt long-lived flows
+// (game sessions, video calls) for marginal latency wins.
+//
+// The name is preserved for source compatibility with earlier
+// callers; semantically this is a race, not a sequential fallback.
+// If every backend errors, the last error is wrapped and returned.
 type FallbackDialer struct {
 	logger  *slog.Logger
 	options []dialerOption
@@ -134,32 +141,87 @@ func NewFallback(logger *slog.Logger) *FallbackDialer {
 	return &FallbackDialer{logger: logger}
 }
 
-// Add appends a backend. Order matters: earlier backends are tried
-// first.
+// Add registers a backend. The order in which backends are added is
+// no longer significant — Dial races them all in parallel — but
+// Add is kept as the construction API so the rest of the codebase
+// (and any third-party wrappers) keep compiling unchanged.
 func (f *FallbackDialer) Add(label, addr string, d Dialer) {
 	f.options = append(f.options, dialerOption{label: label, addr: addr, dialer: d})
 }
 
-// Dial walks the configured backends in order and returns the first
-// connection that succeeds, along with the label of the backend that
-// succeeded.
+// dialResult carries the outcome of one racing dial attempt.
+type dialResult struct {
+	conn  Conn
+	label string
+	addr  string
+	err   error
+}
+
+// Dial races every configured backend and returns the first that
+// finishes handshake. Losing backends are cancelled via the shared
+// context; any connection they produce after the race is closed by
+// the drain goroutine.
 func (f *FallbackDialer) Dial(ctx context.Context) (Conn, string, error) {
 	if len(f.options) == 0 {
 		return nil, "", errors.New("transport: no backends configured")
 	}
-	var lastErr error
+
+	raceCtx, cancel := context.WithCancel(ctx)
+	results := make(chan dialResult, len(f.options))
+
 	for _, opt := range f.options {
-		if err := ctx.Err(); err != nil {
-			return nil, "", err
-		}
+		opt := opt // capture
 		f.logger.Info("transport dial", "transport", opt.label, "addr", opt.addr)
-		conn, err := opt.dialer.Dial(ctx, opt.addr)
-		if err == nil {
-			return conn, opt.label, nil
-		}
-		f.logger.Warn("transport dial failed",
-			"transport", opt.label, "addr", opt.addr, "err", err)
-		lastErr = err
+		go func() {
+			conn, err := opt.dialer.Dial(raceCtx, opt.addr)
+			results <- dialResult{conn: conn, label: opt.label, addr: opt.addr, err: err}
+		}()
 	}
+
+	var (
+		winner   *dialResult
+		lastErr  error
+		finished int
+		total    = len(f.options)
+	)
+	for finished < total {
+		select {
+		case r := <-results:
+			finished++
+			if r.err != nil {
+				f.logger.Warn("transport dial failed",
+					"transport", r.label, "addr", r.addr, "err", r.err)
+				lastErr = r.err
+				continue
+			}
+			if winner == nil {
+				w := r
+				winner = &w
+				cancel() // signal the laggards to abort
+				f.logger.Info("transport race won",
+					"transport", winner.label, "addr", winner.addr)
+				// keep draining the rest in the background so any
+				// late-arriving connections get closed cleanly
+				go drainAndClose(results, total-finished)
+				return winner.conn, winner.label, nil
+			}
+		case <-ctx.Done():
+			cancel()
+			go drainAndClose(results, total-finished)
+			return nil, "", ctx.Err()
+		}
+	}
+	cancel() // unused; satisfies the linter
 	return nil, "", fmt.Errorf("all transports failed: %w", lastErr)
+}
+
+// drainAndClose receives the remaining race results and closes any
+// connection that arrives after the race is already settled.
+func drainAndClose(ch <-chan dialResult, expected int) {
+	for i := 0; i < expected; i++ {
+		r := <-ch
+		if r.conn != nil {
+			_ = r.conn.Close()
+		}
+	}
 }
