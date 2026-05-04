@@ -220,6 +220,18 @@ func (c *Client) Stop() {
 	}
 }
 
+// SOCKSAddr returns the host:port the client's SOCKS5 listener is
+// bound to. Mirrors the resolution rules in Run() so callers can
+// dial the listener (e.g. mobile tun2socks pipes) without re-
+// parsing the configuration.
+func (c *Client) SOCKSAddr() string {
+	addr := c.cfg.SOCKS5Listen
+	if addr == "" {
+		addr = "127.0.0.1:1080"
+	}
+	return addr
+}
+
 // MetricsJSON returns a snapshot of the client's current metrics
 // in JSON. Suitable for exposing across the C-API.
 func (c *Client) MetricsJSON() string {

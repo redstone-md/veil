@@ -71,11 +71,18 @@ platform-side tunnel paths are wired end-to-end:
   / sendProviderMessage for metrics + version) and surfacing
   NEVPNStatusDidChange notifications onto the JS event channel.
 
-The final remaining piece is the tun2socks engine itself: the
-`core/internal/mobile` package models the fd + callback ingestion
-shapes and the lifetime, but packets currently queue and drop
-pending a gVisor or `xjasonlyu/tun2socks` integration. Until that
-lands, the SOCKS5 listener inside the session is reachable from
-inside the tunnel (handy for tests + apps that opt into a SOCKS
-proxy explicitly) but full system-traffic interception is not yet
-exercised end-to-end.
+**Android** is end-to-end functional: the FDPipe in
+`core/internal/mobile/tun_pipe.go` wires
+`xjasonlyu/tun2socks/v2/engine` against the TUN fd
+`VpnService.Builder.establish()` returns. The engine dials the
+per-session SOCKS5 listener for every TCP / UDP flow it lifts off
+the TUN, so full system-traffic interception works.
+
+**iOS** is wired through the cgo / Swift / RN layers but the
+gVisor LinkEndpoint that translates packetFlow read/write
+callbacks into a netstack device has not landed yet — the
+CallbackPipe is a bounded queue today. The SOCKS5 listener inside
+the session is still reachable for apps that opt into a SOCKS
+proxy explicitly, and the queue path lets the rest of the bring-up
+exercise without crashing; full system-traffic interception lands
+together with the LinkEndpoint integration.

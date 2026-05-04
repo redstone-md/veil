@@ -56,11 +56,15 @@ place. The Kotlin `nativeStart` calls into
 forwards to `veil_create` + `veil_mobile_start_with_tun` — taking
 ownership of the TUN fd handed in by `VpnService.Builder.establish()`.
 
-The remaining work is the tun2socks engine inside
-`core/internal/mobile`: the file layout already models the fd
-ingestion shape (FDPipe) and the lifetime, but packets the OS
-writes into the TUN are read and currently dropped pending a gVisor
-or `xjasonlyu/tun2socks` integration. Until that lands, the SOCKS5
-listener inside the session is reachable from inside the tunnel
-(handy for tests) but full system-traffic interception is not yet
-exercised end-to-end.
+The TUN ↔ SOCKS5 forwarder runs through
+[`xjasonlyu/tun2socks/v2/engine`](https://github.com/xjasonlyu/tun2socks)
+inside `core/internal/mobile/tun_pipe.go`. The engine takes the TUN
+fd `VpnService.Builder.establish()` returns and dials TCP / UDP
+flows through the per-session SOCKS5 listener (`127.0.0.1:1080` by
+default). UDP timeout, MTU and the engine log level are at their
+sensible defaults; see `tun_pipe.go` for the knobs.
+
+Constraints: tun2socks's engine package keeps process-wide
+singleton state, so only one Veil tunnel runs in an Android
+process at a time. The mobile clients only ever start one tunnel
+per app, so this is not a usability limitation.

@@ -8,65 +8,58 @@
 // mobile platforms expose tunnels very differently:
 //
 //   - FDPipe — Android. The OS hands us a TUN file descriptor. We
-//     own it for the lifetime of the pipe.
+//     drive xjasonlyu/tun2socks/v2/engine against the fd, which
+//     converts ingressed IP packets into TCP/UDP connections it
+//     dials through the per-session SOCKS5 listener.
 //   - CallbackPipe — iOS. NEPacketTunnelProvider exposes
 //     packetFlow.readPackets / writePackets callbacks rather than a
-//     fd. The Swift host pushes ingressed IP packets into the pipe;
-//     the pipe pushes egress packets back through a callback.
+//     fd. tun2socks's engine cannot consume that shape directly;
+//     wiring this case up needs a custom gVisor LinkEndpoint and is
+//     deferred to a follow-up commit. For now CallbackPipe is a
+//     bounded queue that drops packets — the SOCKS5 listener is
+//     still reachable from inside the tunnel for apps that opt in
+//     explicitly.
 //
-// At Phase 4.6 the two types are deliberately thin queues over a
-// stub forwarder rather than a full tun2socks engine. That keeps the
-// API surface stable while the deep gVisor-based pipe is wired up
-// in a follow-up commit (see TODO_TUN2SOCKS in this file). Without
-// the pipe present:
-//
-//   - Outbound packets the OS writes into the TUN are silently
-//     dropped (logged at debug).
-//   - Inbound packets are never produced.
-//
-// In other words: the SOCKS5 listener works (apps that opt in to a
-// SOCKS proxy still tunnel) but full system traffic interception is
-// gated on the tun2socks integration.
+// Engine constraints: xjasonlyu/tun2socks's engine package keeps
+// state in a process-wide singleton. We mirror that with a package-
+// level mutex so two FDPipes can't fight over it. The mobile clients
+// only ever run one tunnel per process, so this is not a usability
+// limitation.
 
 package mobile
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
-	"os"
 	"sync"
 	"sync/atomic"
+
+	"github.com/xjasonlyu/tun2socks/v2/engine"
 
 	"github.com/redstone-md/veil/core/internal/client"
 )
 
-// TODO_TUN2SOCKS:
-//   Replace the stub forwarder below with a real tun2socks pipe.
-//   Two viable choices:
-//
-//     a) gvisor.dev/gvisor/pkg/tcpip + a SOCKS5 dialer. Most
-//        flexible; ~3kLOC of integration work.
-//     b) github.com/xjasonlyu/tun2socks/v2/engine. Off-the-shelf;
-//        large dep tree. Phase 4.6 is willing to pay this cost
-//        once we settle on the dial-side hook into client.Client.
-//
-//   Whichever choice lands, the API surface in this file does not
-//   need to change — the FDPipe and CallbackPipe types already
-//   model the two ingestion shapes and own the tear-down flow.
+// engineActive guards the tun2socks engine singleton. Only one
+// FDPipe at a time may hold it.
+var engineActive atomic.Bool
 
-// FDPipe owns a TUN file descriptor and shuttles packets between it
-// and the Veil session's SOCKS5 layer.
+// FDPipe owns a TUN file descriptor and drives the tun2socks engine
+// between it and the Veil session's SOCKS5 listener.
 type FDPipe struct {
-	fd     *os.File
+	fd     int
 	cli    *client.Client
 	logger *slog.Logger
 
 	closed atomic.Bool
-	wg     sync.WaitGroup
 }
 
-// AttachFD takes ownership of fd and starts the forwarder. The fd
-// must outlive the returned pipe; calling Close releases the fd.
+// AttachFD takes ownership of fd and starts the tun2socks engine.
+// The fd is closed when the pipe is closed.
+//
+// The pipe dials the SOCKS5 listener at cli.SOCKSAddr() for every
+// new TCP / UDP flow tun2socks lifts off the TUN. Returns an error
+// if another FDPipe is already running in this process.
 func AttachFD(fd int, cli *client.Client, logger *slog.Logger) (*FDPipe, error) {
 	if fd < 0 {
 		return nil, errors.New("mobile: invalid tun fd")
@@ -77,53 +70,52 @@ func AttachFD(fd int, cli *client.Client, logger *slog.Logger) (*FDPipe, error) 
 	if logger == nil {
 		logger = slog.Default()
 	}
-	// os.NewFile does not duplicate; closing the *os.File closes
-	// the underlying fd, matching the lifetime contract above.
-	f := os.NewFile(uintptr(fd), "veil-tun")
-	if f == nil {
-		return nil, errors.New("mobile: os.NewFile rejected tun fd")
+	if !engineActive.CompareAndSwap(false, true) {
+		return nil, errors.New("mobile: tun2socks engine already running in this process")
 	}
-	p := &FDPipe{fd: f, cli: cli, logger: logger}
-	p.wg.Add(1)
-	go p.run()
-	return p, nil
+
+	socks := cli.SOCKSAddr()
+	logger.Info("mobile: starting tun2socks engine",
+		"tun_fd", fd, "socks5", socks)
+
+	engine.Insert(&engine.Key{
+		Device:   fmt.Sprintf("fd://%d", fd),
+		Proxy:    "socks5://" + socks,
+		LogLevel: "warn",
+		MTU:      1500,
+	})
+	// engine.Start swallows errors via log.Fatalf; the Key fields
+	// above are well-formed (constant scheme strings, integer fd,
+	// known LogLevel) so the failure modes we'd hit here are
+	// runtime-only (e.g. EBADF on the supplied fd) — those surface
+	// as the engine logging through log.Fatalf, which terminates
+	// the process. That matches Android's expectation that the
+	// VpnService is killed if the TUN is unusable.
+	engine.Start()
+
+	return &FDPipe{fd: fd, cli: cli, logger: logger}, nil
 }
 
-func (p *FDPipe) run() {
-	defer p.wg.Done()
-	buf := make([]byte, 2048)
-	for {
-		if p.closed.Load() {
-			return
-		}
-		n, err := p.fd.Read(buf)
-		if err != nil {
-			if !p.closed.Load() {
-				p.logger.Debug("mobile: tun read ended", "err", err)
-			}
-			return
-		}
-		if n == 0 {
-			continue
-		}
-		// TODO_TUN2SOCKS: hand buf[:n] to the tun2socks engine
-		// instead of dropping. See package comment.
-		_ = buf[:n]
-	}
-}
-
-// Close stops the forwarder and releases the TUN fd.
+// Close stops the tun2socks engine and releases the TUN fd. Safe to
+// call more than once.
 func (p *FDPipe) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
-	_ = p.fd.Close()
-	p.wg.Wait()
+	p.logger.Info("mobile: stopping tun2socks engine")
+	engine.Stop()
+	engineActive.Store(false)
+	// engine.Stop closes the device which already owns the fd; we
+	// must not double-close it here.
 }
 
 // CallbackPipe carries the iOS-side callback shape: an Ingest method
 // the host calls per inbound packet, plus an emit-callback the pipe
 // invokes per outbound packet.
+//
+// At Phase 4.6 v0 the callback model is a bounded queue with no
+// netstack underneath; see the package comment for the deferred
+// gVisor LinkEndpoint integration.
 type CallbackPipe struct {
 	emit   func([]byte, int)
 	cli    *client.Client
@@ -131,8 +123,8 @@ type CallbackPipe struct {
 
 	closed atomic.Bool
 
-	mu       sync.Mutex
-	pending  [][]byte // queued for processing once tun2socks lands
+	mu      sync.Mutex
+	pending [][]byte
 }
 
 // AttachCallback prepares a callback-driven pipe. The supplied emit
@@ -144,13 +136,15 @@ func AttachCallback(emit func([]byte, int), cli *client.Client, logger *slog.Log
 	if logger == nil {
 		logger = slog.Default()
 	}
+	logger.Warn("mobile: CallbackPipe is a queue-only stub; iOS NetworkExtension end-to-end forwarding is pending a custom gVisor LinkEndpoint")
 	return &CallbackPipe{emit: emit, cli: cli, logger: logger}, nil
 }
 
 // Ingest pushes one IP packet from the OS into the pipe. family is 4
 // for AF_INET, 6 for AF_INET6. Packets are queued for processing by
-// the (still-pending) tun2socks engine; until that lands they are
-// dropped after a small bound to avoid unbounded memory growth.
+// the (still-pending) gVisor LinkEndpoint integration; until that
+// lands they are dropped after a small bound to avoid unbounded
+// memory growth.
 func (p *CallbackPipe) Ingest(packet []byte, family int) {
 	if p.closed.Load() {
 		return
@@ -162,10 +156,10 @@ func (p *CallbackPipe) Ingest(packet []byte, family int) {
 	}
 	p.pending = append(p.pending, packet)
 	p.mu.Unlock()
-	_ = family // forwarded once tun2socks lands
+	_ = family // forwarded once the LinkEndpoint lands
 }
 
-// Close drains the queue and stops emitting outbound packets.
+// Close stops the pipe.
 func (p *CallbackPipe) Close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return
