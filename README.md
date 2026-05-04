@@ -68,9 +68,18 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
       hit Generate, and the GUI emits a complete folder of
       worker source + provider config + DEPLOY recipe that the
       operator runs through `deployctl deploy` / `fly deploy`.
-- [ ] **Phase 3.8** — Direct OAuth push from the installer to
-      Deno Deploy / Fly.io; macOS / Windows codesigning of the
-      installer artefacts.
+- [x] **Phase 3.8 (auto-fetch + codesigning hooks)** — the
+      installer's SSH workflow now auto-detects the remote
+      architecture, downloads the matching `veil` binary from
+      the latest GitHub Release, and uploads it without an
+      operator file-pick step. The installer CI workflow gains
+      opt-in macOS / Windows codesigning hooks (`APPLE_*`,
+      `WINDOWS_*`, `TAURI_SIGNING_*` secrets) — missing secrets
+      fall back to an unsigned build, present secrets sign +
+      notarise. `docs/RELEASING.md` walks operators through
+      the secret setup.
+- [ ] **Phase 3.9** — Direct OAuth push from the installer to
+      Deno Deploy / Fly.io APIs.
 - [x] **Phase 4 (CLI/SDK half)** — Refactor of the connect path into
       a reusable `internal/client.Client`, a CGO-built libveil shared
       library exposing a stable C ABI (`core/pkg/cgo` +
