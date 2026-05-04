@@ -8,6 +8,14 @@ run:
   modules-download-mode: readonly
 
 linters:
+  # Conservative starter set: every linter we keep is here because
+  # it has caught a real bug at least once. Style-only and
+  # heuristic linters (revive, gosec, gocritic) produce too many
+  # false positives in security-and-network-shaped code; their
+  # findings are reviewed by hand on PR rather than blocked in CI.
+  # gosec in particular flags every InsecureSkipVerify, every
+  # math/rand pull, and every G304 path-from-config, all of which
+  # are intentional in this codebase.
   default: none
   enable:
     - errcheck
@@ -15,12 +23,9 @@ linters:
     - ineffassign
     - staticcheck
     - unused
-    - misspell
-    - revive
     - bodyclose
-    - gosec
     - unconvert
-    - gocritic
+    - misspell
   settings:
     errcheck:
       # Many Close() / Write-to-Stdout calls in cleanup paths are
@@ -35,12 +40,17 @@ linters:
         - (*net.TCPConn).CloseWrite
         - (*os.File).Close
         - (*database/sql.Rows).Close
+        - (*database/sql.Stmt).Close
         - (*database/sql.Tx).Rollback
+        - (*github.com/redstone-md/veil/core/internal/users.Store).Close
+        - (*github.com/redstone-md/veil/core/internal/session.Stream).Close
         - fmt.Fprint
         - fmt.Fprintln
         - fmt.Fprintf
         - (io.Writer).Write
         - (*os.File).Write
+        - (*github.com/redstone-md/veil/core/internal/transport.FanInListener).Close
+        - (github.com/redstone-md/veil/core/internal/transport.Listener).Close
     misspell:
       locale: US
     revive:

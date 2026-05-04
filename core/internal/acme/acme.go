@@ -101,7 +101,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	})
 	magic.Issuers = []certmagic.Issuer{issuer}
 
-	cfg.Logger.Info("acme manager initialising",
+	cfg.Logger.Info("acme manager initializing",
 		"cache_dir", cfg.CacheDir,
 		"email", cfg.Email,
 		"domains", cfg.Domains,
