@@ -142,6 +142,7 @@ jobs:
           path-type: inherit
       - name: build libveil
         working-directory: core
+        shell: bash
         env:
           CGO_ENABLED: 1
         run: |
