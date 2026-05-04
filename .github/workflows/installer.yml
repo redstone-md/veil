@@ -2,20 +2,16 @@ name: Installer
 
 # Cross-platform Tauri installer build matrix.
 #
-# Triggered on every push to main (smoke) and on version tags
-# (release). Tag runs upload the bundled artefacts to the matching
-# GitHub Release; main-branch runs upload them as 7-day artefacts so
-# contributors can grab a build without waiting for the next tag.
+# Tag-triggered ONLY: the macOS leg of the matrix costs 10× the
+# minute multiplier in GitHub's billing, and the Windows leg
+# 2×. Running this on every push to main burns the project's CI
+# quota for changes that do not actually need a fresh installer
+# bundle. Maintainers who want an off-cycle build use
+# workflow_dispatch from the Actions tab.
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
-  pull_request:
-    branches: [main]
-    paths:
-      - "installer/**"
-      - ".github/workflows/installer.yml"
   workflow_dispatch: {}
 
 permissions:
