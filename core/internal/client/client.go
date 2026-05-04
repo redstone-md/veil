@@ -21,6 +21,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/config"
 	"github.com/redstone-md/veil/core/internal/crypto"
 	"github.com/redstone-md/veil/core/internal/dpi/decoy"
+	"github.com/redstone-md/veil/core/internal/dpi/mimicry"
 	"github.com/redstone-md/veil/core/internal/dpi/snipool"
 	"github.com/redstone-md/veil/core/internal/dpi/utlsdial"
 	"github.com/redstone-md/veil/core/internal/proxy"
@@ -155,7 +156,16 @@ func (c *Client) Run(ctx context.Context) error {
 	})
 
 	secure := session.NewSecureChannel(conn, established)
-	sess := session.New(secure, session.Options{Role: session.RoleClient, Logger: c.logger})
+	var shaper session.Shaper
+	if mp := mimicry.Profile(c.cfg.Mimicry); mp != mimicry.ProfileNone {
+		shaper = mimicry.New(mp, 0)
+		c.logger.Info("mimicry shaper active", "profile", mp)
+	}
+	sess := session.New(secure, session.Options{
+		Role:   session.RoleClient,
+		Logger: c.logger,
+		Shaper: shaper,
+	})
 
 	runErr := make(chan error, 1)
 	go func() { runErr <- sess.Run() }()

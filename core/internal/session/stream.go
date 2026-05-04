@@ -10,6 +10,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/redstone-md/veil/core/internal/frame"
 )
@@ -83,6 +84,12 @@ func (s *Stream) Read(p []byte) (int, error) {
 
 // Write packetises p into one or more STREAM_DATA frames and sends
 // them in order over the session. Write is single-producer.
+//
+// When the parent Session was constructed with a Shaper, every
+// STREAM_DATA frame is padded up to the shaper's target plaintext
+// size (PadTarget) before encryption, and the call sleeps for the
+// shaper's NextDelay before issuing the underlying write. This is
+// the mimicry-layer integration point.
 func (s *Stream) Write(p []byte) (int, error) {
 	if s.txClosed.Load() {
 		return 0, ErrStreamClosed
@@ -98,9 +105,20 @@ func (s *Stream) Write(p []byte) (int, error) {
 			StreamID: s.id,
 			Payload:  chunk,
 		}
+		if shaper := s.sess.shaper; shaper != nil {
+			target := shaper.PadTarget(len(chunk))
+			if pad := target - len(chunk); pad > 0 && pad <= frame.MaxPadding {
+				f.PaddingLen = uint16(pad)
+			}
+		}
 		encoded, err := f.Encode()
 		if err != nil {
 			return written, err
+		}
+		if shaper := s.sess.shaper; shaper != nil {
+			if d := shaper.NextDelay(); d > 0 {
+				time.Sleep(d)
+			}
 		}
 		if err := s.sess.secure.SendFrame(encoded); err != nil {
 			return written, err

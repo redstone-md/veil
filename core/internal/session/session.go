@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/redstone-md/veil/core/internal/crypto"
 	"github.com/redstone-md/veil/core/internal/frame"
@@ -52,6 +53,7 @@ type Session struct {
 	secure *SecureChannel
 	role   Role
 	logger *slog.Logger
+	shaper Shaper
 
 	streamsMu sync.Mutex
 	streams   map[uint32]*Stream
@@ -71,6 +73,19 @@ type Options struct {
 	// Logger receives session-level diagnostic events. If nil,
 	// slog.Default() is used.
 	Logger *slog.Logger
+	// Shaper, when non-nil, is consulted by every outgoing
+	// STREAM_DATA frame to apply the mimicry layer (padding + write
+	// delay). nil disables shaping.
+	Shaper Shaper
+}
+
+// Shaper is the subset of the mimicry interface the session needs.
+// It is declared here as an interface (rather than importing the
+// concrete type) to keep the session package free of a dependency
+// on the dpi tree.
+type Shaper interface {
+	PadTarget(currentLen int) int
+	NextDelay() time.Duration
 }
 
 // New constructs a Session over the given SecureChannel. The caller
@@ -85,6 +100,7 @@ func New(secure *SecureChannel, opts Options) *Session {
 		secure:   secure,
 		role:     opts.Role,
 		logger:   logger,
+		shaper:   opts.Shaper,
 		streams:  make(map[uint32]*Stream),
 		incoming: make(chan *Stream, 32),
 		closed:   make(chan struct{}),

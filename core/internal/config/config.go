@@ -28,8 +28,17 @@ type ServerTransport struct {
 	// Type is the transport adapter to bind ("quic", "wss", ...).
 	Type TransportType `yaml:"type"`
 
-	// Listen is the host:port the adapter binds to.
+	// Listen is the host:port the adapter binds to. When the
+	// adapter should bind several addresses (multi-IP / multi-port
+	// deployments), use Listens instead.
 	Listen string `yaml:"listen"`
+
+	// Listens, when non-empty, makes the adapter bind ALL listed
+	// addresses. The Listen field above is ignored when Listens
+	// is populated. Each address gets its own underlying listener;
+	// from the rest of the stack's perspective they look like
+	// distinct transport entries with identical configuration.
+	Listens []string `yaml:"listens"`
 
 	// CertFile and KeyFile are the TLS certificate and private key
 	// for transports that terminate TLS (WSS, Reality fallback). When
@@ -180,6 +189,13 @@ type ClientConfig struct {
 
 	// Decoy controls the optional cover-traffic generator.
 	Decoy DecoyConfig `yaml:"decoy"`
+
+	// Mimicry selects an outbound traffic-shape profile applied to
+	// every STREAM_DATA frame. Recognised values mirror the
+	// constants in internal/dpi/mimicry: "" (off), "browse",
+	// "video", "messaging", "search". Empty leaves the wire shape
+	// raw — fastest, but easiest to classify.
+	Mimicry string `yaml:"mimicry"`
 }
 
 // DecoyConfig configures the cover-traffic generator. Defaults are
@@ -220,8 +236,8 @@ func (c *ServerConfig) Validate() error {
 		if t.Type == "" {
 			return fmt.Errorf("server.transports[%d].type is required", i)
 		}
-		if t.Listen == "" {
-			return fmt.Errorf("server.transports[%d].listen is required", i)
+		if t.Listen == "" && len(t.Listens) == 0 {
+			return fmt.Errorf("server.transports[%d]: listen or listens is required", i)
 		}
 	}
 	if c.StaticKeyPath == "" {
