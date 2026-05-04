@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Veil Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #0d1117; color: #c9d1d9;
+    margin: 0; padding: 1.5rem; max-width: 1100px;
+  }
+  h1 { font-weight: 600; margin: 0 0 1rem; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+  .stat { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0.75rem 1rem; }
+  .stat .label { font-size: 0.8rem; color: #8b949e; }
+  .stat .value { font-size: 1.5rem; font-weight: 600; margin-top: 0.25rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #30363d; }
+  th { color: #8b949e; font-weight: 500; }
+  tr:hover { background: #161b22; }
+  .status-active { color: #3fb950; }
+  .status-revoked { color: #f85149; }
+  .status-expired, .status-quota_exceeded { color: #d29922; }
+  button {
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 0.4rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+  }
+  button:hover { background: #30363d; }
+  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
+  input { background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; padding: 0.4rem 0.6rem; border-radius: 6px; }
+  input:focus { outline: none; border-color: #58a6ff; }
+  code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.85rem; color: #79c0ff; }
+  .toolbar { margin-bottom: 0.75rem; }
+  .empty { color: #8b949e; padding: 2rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>Veil Admin</h1>
+
+<div class="stats" id="stats"></div>
+
+<div class="row toolbar">
+  <input id="newName" placeholder="user name" />
+  <input id="newPubkey" placeholder="client pubkey (base64)" style="flex:1" />
+  <button onclick="createUser()">Add user</button>
+  <button onclick="loadAll()">Refresh</button>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Name</th><th>Status</th><th>Created</th>
+      <th>Used</th><th>Quota</th><th>Expires</th><th>Last seen</th><th></th>
+    </tr>
+  </thead>
+  <tbody id="users"></tbody>
+</table>
+<div class="empty" id="empty" style="display:none">No users yet. Add one above to get started.</div>
+
+<script>
+function bytes(n){
+  if(n<1024) return n+' B';
+  const u=['KB','MB','GB','TB']; let i=-1, v=n;
+  do{ v/=1024; i++; }while(v>=1024 && i<u.length-1);
+  return v.toFixed(1)+' '+u[i];
+}
+function ts(t){ return t? new Date(t*1000).toISOString().slice(0,10): '—'; }
+
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  if(!r.ok) throw new Error(r.status+' '+(await r.text()));
+  if(r.status===204) return null;
+  return r.json();
+}
+
+async function loadStats(){
+  const s = await api('/api/dashboard');
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="label">Users</div><div class="value">${s.users_total}</div></div>
+    <div class="stat"><div class="label">Active</div><div class="value">${s.users_active}</div></div>
+    <div class="stat"><div class="label">Bytes this month</div><div class="value">${bytes(s.bytes_used_current_month)}</div></div>
+    <div class="stat"><div class="label">With quota</div><div class="value">${s.users_with_quota}</div></div>
+    <div class="stat"><div class="label">At quota</div><div class="value">${s.users_at_quota}</div></div>`;
+}
+
+async function loadUsers(){
+  const list = await api('/api/users');
+  const tbody = document.getElementById('users');
+  tbody.innerHTML = '';
+  document.getElementById('empty').style.display = list.length===0 ? 'block' : 'none';
+  for(const u of list){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><strong>${u.name}</strong><br/><code>${u.id}</code></td>
+      <td class="status-${u.status}">${u.status}</td>
+      <td>${ts(u.created_at)}</td>
+      <td>${bytes(u.used_bytes_current_month)}</td>
+      <td>${u.quota_bytes_per_month? bytes(u.quota_bytes_per_month):'∞'}</td>
+      <td>${ts(u.expires_at)}</td>
+      <td>${ts(u.last_seen)}</td>
+      <td>
+        ${u.status==='active'
+          ? `<button onclick="setStatus('${u.id}','revoked')">revoke</button>`
+          : `<button onclick="setStatus('${u.id}','active')">restore</button>`}
+        <button onclick="deleteUser('${u.id}')">delete</button>
+      </td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+async function loadAll(){
+  try{ await loadStats(); await loadUsers(); }
+  catch(e){ alert(e.message); }
+}
+
+async function createUser(){
+  const name = document.getElementById('newName').value.trim();
+  const pub  = document.getElementById('newPubkey').value.trim();
+  if(!name || !pub){ alert('name and pubkey required'); return; }
+  try{
+    await api('/api/users', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name, pubkey_b64: pub})});
+    document.getElementById('newName').value='';
+    document.getElementById('newPubkey').value='';
+    loadAll();
+  }catch(e){ alert(e.message); }
+}
+
+async function setStatus(id, status){
+  try{
+    await api('/api/users/'+id, {method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({status})});
+    loadAll();
+  }catch(e){ alert(e.message); }
+}
+
+async function deleteUser(id){
+  if(!confirm('Delete user '+id+'?')) return;
+  try{
+    await api('/api/users/'+id, {method:'DELETE'});
+    loadAll();
+  }catch(e){ alert(e.message); }
+}
+
+loadAll();
+setInterval(loadAll, 30000);
+</script>
+</body>
+</html>
