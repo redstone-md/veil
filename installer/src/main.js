@@ -285,6 +285,20 @@ function renderSSH() {
     field("Password (or leave blank for key-based auth)", "password", f.password || "", onChange("password")),
   );
 
+  if (!f.binary_source) f.binary_source = "release";
+  const binBlock = el("div", {},
+    el("h2", {}, "Veil binary source"),
+    el("label", {}, "Where to get the veil binary the installer uploads"),
+    (() => {
+      const sel = el("select", { onchange: (ev) => { f.binary_source = ev.target.value; } },
+        el("option", { value: "release" }, "Latest GitHub Release (recommended)"),
+        el("option", { value: "file" }, "Pick a local file"),
+      );
+      sel.value = f.binary_source;
+      return sel;
+    })(),
+  );
+
   const cfgBlock = el("div", {},
     el("h2", {}, "Veil server configuration"),
     field("Public host name", "domain", f.domain || "", onChange("domain")),
@@ -309,16 +323,33 @@ function renderSSH() {
 
   const installBtn = el("button", { class: "primary", onclick: async () => {
     status.style.display = "block";
-    status.textContent = "Reading bundled veil binary…";
     stepsBox.innerHTML = "";
     try {
       const target = sshTarget(f);
-      // For the v0 GUI we ship the binary ourselves; the Tauri
-      // resource layer hands us its bytes. Until that resource is
-      // wired we expose a file-pick fallback so contributors can
-      // exercise the install path locally.
-      const veilBytes = await pickVeilBinary();
-      if (!veilBytes) { status.textContent = "No binary chosen; aborting."; return; }
+
+      let veilBytes;
+      if (f.binary_source === "file") {
+        status.textContent = "Reading local veil binary…";
+        veilBytes = await pickVeilBinary();
+        if (!veilBytes) { status.textContent = "No binary chosen; aborting."; return; }
+      } else {
+        // Default: probe the host so we know its arch, then pull
+        // the matching asset from the latest GitHub Release.
+        status.textContent = "Probing host arch…";
+        const probe = await invoke("ssh_probe", { target });
+        if (probe.status !== 0) {
+          status.innerHTML = `<strong style="color:var(--red)">Probe failed (status ${probe.status})</strong>: ${escape(probe.stderr || probe.stdout)}`;
+          return;
+        }
+        const lines = probe.stdout.split(/\r?\n/);
+        const uname = lines[0] || "";
+        const osRelease = lines.slice(1).join("\n");
+        status.textContent = `Fetching veil-${uname}-* from GitHub Release…`;
+        veilBytes = await invoke("release_fetch_veil", {
+          params: { uname_m: uname, os_release_text: osRelease },
+        });
+      }
+
       status.textContent = "Installing — this may take 10-15 seconds…";
       const plan = {
         target,
@@ -342,6 +373,7 @@ function renderSSH() {
     el("p", { class: "subtitle" }, "Provision a fresh VPS over SSH: upload the binary, write the config, register a systemd unit, start the service."),
     credBlock,
     cfgBlock,
+    binBlock,
     el("div", { class: "actions" },
       el("button", { onclick: () => nav("home") }, "← Back"),
       el("div", { class: "spacer" }),

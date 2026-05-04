@@ -15,10 +15,12 @@
 use std::collections::BTreeMap;
 use std::fs;
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use serde::Deserialize;
 use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
+mod release;
 mod ssh;
 
 #[tauri::command]
@@ -132,6 +134,42 @@ async fn edge_generate(params: EdgeParams) -> Result<BTreeMap<String, String>, S
     Ok(out)
 }
 
+/// Look up the latest tagged release on GitHub and return the
+/// asset list verbatim. The frontend uses the result to populate
+/// the SSH workflow's "fetch from release" pane.
+#[tauri::command]
+async fn release_latest(repo: Option<String>) -> Result<release::Release, String> {
+    let repo = repo
+        .as_deref()
+        .unwrap_or(release::DEFAULT_REPO);
+    release::latest(repo).await.map_err(|e| format!("{e:#}"))
+}
+
+/// Download the platform-matching `veil` binary from the latest
+/// release and return it base64-encoded so the SSH workflow can
+/// hand it straight to ssh_install.
+///
+/// uname_m and os_release_text are typically supplied by an
+/// earlier ssh_probe call.
+#[derive(Debug, Deserialize)]
+struct FetchVeilParams {
+    repo: Option<String>,
+    uname_m: String,
+    os_release_text: String,
+}
+
+#[tauri::command]
+async fn release_fetch_veil(params: FetchVeilParams) -> Result<String, String> {
+    let repo = params.repo.as_deref().unwrap_or(release::DEFAULT_REPO);
+    let r = release::latest(repo).await.map_err(|e| format!("{e:#}"))?;
+    let target = release::TargetOS::detect_from_os_release(&params.os_release_text);
+    let asset_name = release::asset_name_for(&params.uname_m, target)
+        .map_err(|e| format!("{e:#}"))?;
+    let asset = release::pick_asset(&r, &asset_name).map_err(|e| format!("{e:#}"))?;
+    let bytes = release::download(asset).await.map_err(|e| format!("{e:#}"))?;
+    Ok(B64.encode(bytes))
+}
+
 /// Save a generated edge bundle into a directory chosen by the
 /// operator via a native folder dialog.
 #[tauri::command]
@@ -170,6 +208,8 @@ pub fn run() {
             ssh_install,
             edge_generate,
             edge_save,
+            release_latest,
+            release_fetch_veil,
         ])
         .setup(|app| {
             #[cfg(debug_assertions)]
