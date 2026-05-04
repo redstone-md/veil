@@ -1,0 +1,56 @@
+name: Fuzz
+
+# Nightly fuzz run. Each target gets a short slice of wall-clock so
+# the whole job stays well under an hour; long-running fuzz lives
+# elsewhere (OSS-Fuzz integration is on the Phase 5+ roadmap).
+
+on:
+  schedule:
+    - cron: "37 3 * * *" # ~03:37 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz / ${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: frame
+            path: ./internal/frame
+            fn: FuzzDecodeRoundTrip
+          - name: stream-open
+            path: ./internal/frame
+            fn: FuzzDecodeStreamOpen
+          - name: reality-hello
+            path: ./internal/transport/realitytr
+            fn: FuzzParseClientHello
+          - name: sharelink
+            path: ./internal/sharelink
+            fn: FuzzDecode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache: true
+          cache-dependency-path: core/go.sum
+      - name: fuzz
+        working-directory: core
+        run: |
+          go test -run=^$ \
+                  -fuzz=${{ matrix.target.fn }} \
+                  -fuzztime=300s \
+                  ${{ matrix.target.path }}
+      - name: upload failing inputs (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures-${{ matrix.target.name }}
+          path: |
+            core/internal/**/testdata/fuzz/${{ matrix.target.fn }}/*
+          retention-days: 14
