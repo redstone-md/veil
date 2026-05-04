@@ -18,12 +18,21 @@ desktop and mobile client apps, deployment recipes, and SDK bindings.
 
 **Pre-alpha. Under active development. Not ready for production use.**
 
-The current focus is the Phase 0 / Phase 1 milestones from the [PRD](PRD.md):
-protocol foundation, basic QUIC + Noise handshake, and a working end-to-end
-prototype. APIs, configuration formats, and the wire protocol are unstable
-and will change without notice until the v1.0 release.
+Where we are on the [roadmap](PRD.md#18-roadmap):
 
-See the [roadmap](PRD.md#18-roadmap) for milestones.
+- [x] **Phase 0** — Foundation: spec, threat model, ADRs, QUIC + Noise XK skeleton.
+- [x] **Phase 1** — Core MVP: VWP/1 frames, multiplexed sessions, SOCKS5 client,
+      end-to-end TCP forwarding, Docker Compose deploy. A client run with
+      `veil connect` exposes a local SOCKS5 proxy that tunnels arbitrary
+      TCP traffic through a `veil serve` instance.
+- [ ] **Phase 2** — Anti-DPI: TLS-Reality and WSS transports, uTLS fingerprint
+      mimicry, dynamic SNI pool, decoy traffic.
+- [ ] **Phase 3** — Self-host UX: Tauri installer, embedded admin UI, ACME,
+      user management.
+- [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
+
+APIs, configuration formats, and the wire protocol are unstable and will
+change without notice until the v1.0 release.
 
 ---
 
@@ -108,7 +117,48 @@ go build -o ../bin/veil ./cmd/veil
 ../bin/veil --help
 ```
 
-(Cross-compilation, GUI installer, and Docker images will be added in Phase 1–3.)
+### Run a server and tunnel through it (local smoke test)
+
+```bash
+# 1. Generate the server's keypair and configuration
+mkdir -p state
+cat > server.yaml <<'EOF'
+listen: "127.0.0.1:18443"
+static_key_path: "state/server.key"
+authorized_keys_path: "state/authorized_keys"
+EOF
+touch state/authorized_keys
+
+# 2. Start the server (it will create state/server.key on first run)
+./bin/veil serve --config server.yaml &
+
+# 3. Read the server's public key and create a client config
+SERVER_PUB=$(sed -n '2p' state/server.key)
+cat > client.yaml <<EOF
+server_addr: "127.0.0.1:18443"
+server_static_key_b64: "$SERVER_PUB"
+static_key_path: "state/client.key"
+socks5_listen: "127.0.0.1:1080"
+EOF
+
+# 4. Start the client once to generate its key, then add that key to
+#    the server's authorized_keys
+./bin/veil connect --config client.yaml &
+sleep 1
+sed -n '2p' state/client.key >> state/authorized_keys
+# (restart server so it picks up the new authorized client)
+kill %1 && ./bin/veil serve --config server.yaml &
+sleep 1
+
+# 5. Use it
+curl --proxy socks5h://127.0.0.1:1080 https://example.com
+```
+
+### Run a server in Docker
+
+See [`deploy/docker/README.md`](deploy/docker/README.md).
+
+(GUI installer, mobile clients, and signed releases land in Phases 3–5.)
 
 ---
 
