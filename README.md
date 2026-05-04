@@ -86,7 +86,17 @@ Where we are on the [roadmap](PRD.md#18-roadmap):
 - [ ] **Phase 5.7** — Functional MASQUE implementation once
       `quic-go/masque-go` and `refraction-networking/uquic`
       stabilise; perf benchmarks vs. bare QUIC and Reality.
-- [ ] **Phase 4–6** — Clients, edge backends, hardening, audit, GA.
+- [x] **Phase 6 (release machinery)** — tag-triggered cross-platform
+      `release.yml` workflow that builds the full asset matrix,
+      signs every artefact with cosign keyless via the workflow's
+      GitHub OIDC identity, generates per-binary SBOMs via syft,
+      and uploads everything to a GitHub Release. CHANGELOG in the
+      Keep a Changelog 1.1 format covering every shipped phase.
+      `docs/RELEASING.md` operator process, `docs/LAUNCH_CHECKLIST.md`
+      pre-GA verification checklist.
+- [ ] **Phase 6.5** — distribution channels: Homebrew tap, Scoop
+      bucket, signed Docker images on push to ghcr.io. External
+      audit kickoff (depends on funding).
 
 APIs, configuration formats, and the wire protocol are unstable and will
 change without notice until the v1.0 release.
