@@ -24,7 +24,7 @@ function render() {
       renderSSH();
       break;
     case "edge":
-      renderComingSoon(state.route);
+      renderEdge();
       break;
   }
 }
@@ -56,11 +56,12 @@ function renderHome() {
     el("div", { class: "choice-grid" },
       choice("Docker", "Generate a docker-compose.yml you can scp to a host with Docker installed.", () => nav("docker")),
       choice("VPS via SSH", "Connect to a fresh VPS and install Veil via SSH end-to-end.", () => nav("ssh")),
-      choice("Edge function", "Deploy to Deno Deploy / Fly.io as an edge proxy (planned).", () => nav("edge")),
+      choice("Edge function", "Generate a ready-to-deploy Deno Deploy or Fly.io edge worker.", () => nav("edge")),
     ),
     el("div", { class: "notice" },
       el("strong", {}, "Pre-alpha. "),
-      "Docker and SSH workflows are functional; the Edge workflow is a scaffold for upcoming work."
+      "Docker, SSH, and Edge workflows all generate working artefacts. ",
+      "Direct OAuth push for Edge providers lands in Phase 3.8."
     ),
   );
 }
@@ -171,20 +172,103 @@ volumes:
 `;
 }
 
-function renderComingSoon(route) {
-  // Only the edge route stays a placeholder now; SSH has its own
-  // renderer below.
+function renderEdge() {
+  const f = state.form;
+  const onChange = (key) => (ev) => { f[key] = ev.target.value; };
+
+  if (!f.provider) f.provider = "deno";
+
+  const providerSelect = el("div", {},
+    el("label", {}, "Edge provider"),
+    (() => {
+      const sel = el("select", { onchange: (ev) => { f.provider = ev.target.value; render(); } },
+        el("option", { value: "deno" }, "Deno Deploy"),
+        el("option", { value: "fly" }, "Fly.io"),
+      );
+      sel.value = f.provider;
+      return sel;
+    })(),
+  );
+
+  const cfgBlock = el("div", {},
+    el("h2", {}, "Origin (your Veil server)"),
+    field("Origin host (the VPS the edge worker forwards to)", "origin_host", f.origin_host || "", onChange("origin_host")),
+    field("Origin port", "origin_port", f.origin_port || "443", onChange("origin_port")),
+    field("URL path on the edge", "edge_path", f.edge_path || "/api/sync", onChange("edge_path")),
+    f.provider === "fly"
+      ? field("Fly.io app name", "app_name", f.app_name || "veil-edge", onChange("app_name"))
+      : null,
+  );
+
+  const status = el("div", { class: "notice", style: "display:none" });
+  const filesBox = el("div", {});
+
+  const generateBtn = el("button", { class: "primary", onclick: async () => {
+    status.style.display = "block";
+    status.textContent = "Generating worker bundle…";
+    filesBox.innerHTML = "";
+    try {
+      const params = {
+        provider: f.provider,
+        origin_host: (f.origin_host || "").trim(),
+        origin_port: parseInt(f.origin_port || "443", 10),
+        path: f.edge_path || "/ws",
+        app_name: f.app_name || null,
+      };
+      if (!params.origin_host) {
+        status.innerHTML = `<strong style="color:var(--red)">origin_host is required</strong>`;
+        return;
+      }
+      const files = await invoke("edge_generate", { params });
+      f._files = files;
+      status.innerHTML = `<strong>Bundle ready</strong> — ${Object.keys(files).length} files. ` +
+        `Save into a folder and follow <code>DEPLOY.md</code>.`;
+      for (const [name, content] of Object.entries(files)) {
+        const summary = el("summary", { style: "cursor:pointer;font-weight:600" }, name + `  (${content.length} B)`);
+        const pre = el("pre", { style: "white-space:pre-wrap;background:#0d1117;border:1px solid var(--border);border-radius:6px;padding:0.5rem;font-family:JetBrains Mono,Consolas,monospace;font-size:0.8rem;max-height:240px;overflow:auto" });
+        pre.textContent = content;
+        const det = el("details", { style: "margin-top:0.4rem" }, summary, pre);
+        filesBox.append(det);
+      }
+    } catch (e) {
+      status.innerHTML = `<strong style="color:var(--red)">Generate failed:</strong> ${escape(String(e))}`;
+    }
+  }}, "Generate bundle");
+
+  const saveBtn = el("button", { onclick: async () => {
+    if (!f._files) {
+      status.style.display = "block";
+      status.textContent = "Generate the bundle first.";
+      return;
+    }
+    try {
+      const dir = await invoke("edge_save", { files: f._files });
+      if (!dir) return;
+      status.innerHTML = `<strong>Saved.</strong> Files written into <code>${escape(dir)}</code>.`;
+    } catch (e) {
+      status.innerHTML = `<strong style="color:var(--red)">Save failed:</strong> ${escape(String(e))}`;
+    }
+  }}, "Save bundle…");
+
   root.append(
     el("h1", {}, "Edge function"),
-    el("p", { class: "subtitle" }, "Not yet implemented in this revision."),
-    el("div", { class: "notice" },
-      "The edge-function workflow (Deno Deploy / Fly.io OAuth) is ",
-      "on the Phase 3.7+ roadmap. Until it lands, use the Docker ",
-      "compose path or run the reference workers in ",
-      el("code", {}, "deploy/edge/"), " by hand."
-    ),
+    el("p", { class: "subtitle" }, "Generate a ready-to-deploy edge worker that proxies traffic to your origin Veil server."),
+    providerSelect,
+    cfgBlock,
     el("div", { class: "actions" },
       el("button", { onclick: () => nav("home") }, "← Back"),
+      el("div", { class: "spacer" }),
+      generateBtn,
+      saveBtn,
+    ),
+    status,
+    el("h2", {}, "Bundle contents"),
+    filesBox,
+    el("div", { class: "notice" },
+      "v0 generates the worker source + a deploy recipe. Direct ",
+      "OAuth into Deno Deploy / Fly.io is on the Phase 3.8 roadmap; ",
+      "until then run ", el("code", {}, "deployctl deploy"), " or ",
+      el("code", {}, "fly deploy"), " yourself against the saved bundle."
     ),
   );
 }
