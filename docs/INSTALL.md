@@ -56,18 +56,28 @@ concern. Add WSS as a fall-back if you want to handle networks
 that strip UDP.
 
 A minimal `server.yaml` for a Reality-fronted server pointing at
-`www.cloudflare.com`:
+`www.microsoft.com`:
 
 ```yaml
 transports:
   - type: reality
     listen: "0.0.0.0:443"
-    target_sni: "www.cloudflare.com"
-    target_addr: "www.cloudflare.com:443"
+    target_sni: "www.microsoft.com"
+    target_addr: "www.microsoft.com:443"
 
 static_key_path: "/var/lib/veil/server.key"
 user_db_path:    "/var/lib/veil/users.db"
 ```
+
+> **Choosing `target_sni`.** Pick a host that is reachable from
+> *every* network your clients will run from. `www.cloudflare.com`
+> is a common example but is blocked or DNS-poisoned in RU and CN;
+> a probe in those locales lands on a dead splice and Reality looks
+> broken. `www.microsoft.com`, `apple.com`, or
+> `update.microsoft.com` are safer global defaults — they serve real
+> Microsoft / Apple infrastructure that no censor blocks without
+> visible collateral damage. The TLS-layer cover is identical
+> either way.
 
 The first time you run `veil serve`, a fresh static keypair is
 generated at `static_key_path`. The user database is created on
@@ -171,7 +181,7 @@ veil user show-config \
   --server-pubkey "PUBLIC_KEY_FROM_STEP_2C" \
   --server-addr   "your-vps.example.com:443" \
   --transport     reality \
-  --sni           "www.cloudflare.com" \
+  --sni           "www.microsoft.com" \
   <user-id>
 ```
 

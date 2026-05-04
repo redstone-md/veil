@@ -378,7 +378,7 @@ function renderEditor(host) {
   });
   const ta = el("textarea", {
     spellcheck: "false",
-    placeholder: "veil://eyJTZXJ2ZXJzIjpbey4uLn1dfQ\n\n— or —\n\nservers:\n  - type: reality\n    addr: vps.example.com:443\n    sni: www.cloudflare.com\nserver_static_key_b64: ...\nstatic_key_path: /tmp/veil-client.key\nsocks5_listen: 127.0.0.1:1080",
+    placeholder: "veil://eyJTZXJ2ZXJzIjpbey4uLn1dfQ\n\n— or —\n\nservers:\n  - type: reality\n    addr: vps.example.com:443\n    sni: www.microsoft.com\nserver_static_key_b64: ...\nstatic_key_path: /tmp/veil-client.key\nsocks5_listen: 127.0.0.1:1080",
     oninput: (ev) => { state.editorBuffer = ev.target.value; },
   });
   ta.value = state.editorBuffer;
