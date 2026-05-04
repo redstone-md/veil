@@ -85,13 +85,22 @@ func run(ctx context.Context, cfgPath string) error {
 
 	fanIn := transport.NewFanIn(slog.Default())
 	for i, t := range cfg.Transports {
-		ln, err := buildListener(t, staticKP.Public, acmeMgr)
-		if err != nil {
-			return fmt.Errorf("transport[%d] %s: %w", i, t.Type, err)
+		addrs := t.Listens
+		if len(addrs) == 0 {
+			addrs = []string{t.Listen}
 		}
-		label := fmt.Sprintf("%s@%s", t.Type, t.Listen)
-		fanIn.Add(label, ln)
-		slog.Info("listening", "transport", t.Type, "addr", t.Listen)
+		for _, addr := range addrs {
+			leaf := t
+			leaf.Listen = addr
+			leaf.Listens = nil
+			ln, err := buildListener(leaf, staticKP.Public, acmeMgr)
+			if err != nil {
+				return fmt.Errorf("transport[%d] %s @ %s: %w", i, t.Type, addr, err)
+			}
+			label := fmt.Sprintf("%s@%s", t.Type, addr)
+			fanIn.Add(label, ln)
+			slog.Info("listening", "transport", t.Type, "addr", addr)
+		}
 	}
 	defer fanIn.Close()
 
