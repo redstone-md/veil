@@ -7,12 +7,15 @@ UI in `clients/mobile/` and `libveil`.
 
 ```
 ios/
-└── PacketTunnelProvider/
-    ├── PacketTunnelProvider.swift   ← NEPacketTunnelProvider subclass
-    ├── VeilSession.swift            ← Swift wrapper over the C ABI
-    ├── Veil-Bridging-Header.h       ← Re-exports core/pkg/cgo/include/veil.h
-    ├── Info.plist                   ← NetworkExtension target plist
-    └── PacketTunnel.entitlements    ← App Group + packet-tunnel-provider
+├── PacketTunnelProvider/            ← extension target
+│   ├── PacketTunnelProvider.swift   ← NEPacketTunnelProvider subclass
+│   ├── VeilSession.swift            ← Swift wrapper over the C ABI (ingest + emit)
+│   ├── Veil-Bridging-Header.h       ← re-exports core/pkg/cgo/include/veil.h
+│   ├── Info.plist                   ← NetworkExtension target plist
+│   └── PacketTunnel.entitlements    ← App Group + packet-tunnel-provider
+└── VeilBridge/                      ← host-app React Native module
+    ├── VeilBridge.swift             ← NETunnelProviderManager wrapper
+    └── VeilBridge.m                 ← RCT_EXTERN_MODULE glue
 ```
 
 ## Build prerequisites
@@ -61,8 +64,18 @@ ios/
 
 ## Status
 
-Phase 4.6 v0 — file layout and the PacketTunnelProvider/VeilSession
-skeleton are in place. The packetFlow ↔ libveil pump connects up
-alongside `core/pkg/cgo/ne_ios.go`, the iOS-specific cgo entry
-point that maps NetworkExtension's `[Data]` packet shape onto a
-form libveil's TUN ingestion API can consume.
+Phase 4.6 — file layout, PacketTunnelProvider, VeilSession, the
+host-app VeilBridge module, and the libveil ingest / emit-callback
+plumbing are all in place. The packetFlow ↔ libveil pump runs
+through `veil_ne_ingest_packet` (Swift → Go) and the
+`@_cdecl("veil_emit_trampoline")` callback (Go → Swift); the Go side
+is in `core/pkg/cgo/mobile.go` + `core/internal/mobile/tun_pipe.go`.
+
+The remaining work is the actual tun2socks engine inside
+`internal/mobile`: the file layout already models the two ingestion
+shapes (FDPipe / CallbackPipe) and the lifetime, but packets queued
+through `Ingest()` are dropped pending a gVisor or
+`xjasonlyu/tun2socks` integration. Until that lands, the SOCKS5
+listener inside the session is reachable from inside the tunnel
+(handy for tests) but full system-traffic interception is not yet
+exercised end-to-end.

@@ -4,27 +4,42 @@
 // handle, RAII Stop on deinit, structured Event delivery via a
 // Swift closure, errors thrown rather than returned as raw codes.
 //
-// libveil's event callback fires from an internal goroutine; we
-// hop onto a serial DispatchQueue before invoking the user's
-// closure so the Swift side never sees re-entrancy.
+// libveil's event callback fires from an internal goroutine; we hop
+// onto a serial DispatchQueue before invoking the user's closure so
+// the Swift side never sees re-entrancy.
+//
+// Packet flow: NEPacketTunnelProvider.packetFlow.readPackets gives
+// us inbound IP packets in a Swift-array shape; we forward each one
+// through veil_ne_ingest_packet. libveil produces outbound packets
+// asynchronously and hands them back through an emit callback this
+// file installs at start time; the callback shovels them into
+// packetFlow.writePackets.
 
 import Foundation
+import NetworkExtension
 
 final class VeilSession {
 
     typealias EventHandler = (String) -> Void
+    typealias PacketEmitter = (Data, NSNumber) -> Void
 
     private var handle: VeilHandle = 0
     private let queue = DispatchQueue(label: "org.veil.event-queue")
     private var onEvent: EventHandler?
-    // Retained box for the C user_data so the trampoline can find
-    // its way back to Swift land without us having to maintain a
-    // global map.
+    private var onEmit: PacketEmitter?
+    // Retained box for the C user_data so the trampolines can find
+    // their way back to this Swift instance without us having to
+    // keep a global registry.
     private var userDataBox: VeilUserData?
 
-    static func start(configText: String, onEvent: @escaping EventHandler) throws -> VeilSession {
+    static func start(
+        configText: String,
+        onEvent: @escaping EventHandler,
+        onEmit: @escaping PacketEmitter
+    ) throws -> VeilSession {
         let s = VeilSession()
         s.onEvent = onEvent
+        s.onEmit = onEmit
 
         let h: VeilHandle = configText.withCString { cstr in
             return veil_create(cstr)
@@ -32,13 +47,11 @@ final class VeilSession {
         guard h != 0 else { throw VeilError.createFailed }
         s.handle = h
 
-        // Box `s` into a heap-stable container the trampoline can
-        // reconstruct via Unmanaged.
         let box = VeilUserData(owner: s)
         s.userDataBox = box
         let userPtr = Unmanaged.passUnretained(box).toOpaque()
 
-        let rc = veil_start(h, veil_event_trampoline, userPtr)
+        let rc = veil_ne_start(h, veil_event_trampoline, veil_emit_trampoline, userPtr)
         if rc != 0 {
             veil_destroy(h)
             throw VeilError.startFailed(rc)
@@ -70,28 +83,41 @@ final class VeilSession {
         }
     }
 
-    /// Pump packets read off the NEPacketTunnelProvider.packetFlow
-    /// into libveil. The matching cgo-side entry point is to be
-    /// added in `core/pkg/cgo/ne_ios.go`; until then this is a
-    /// no-op so the skeleton compiles.
+    /// Pump one batch of packets read off NEPacketTunnelFlow into
+    /// libveil. Each Data is one IP packet; the matching protocol
+    /// in `protocols` carries AF_INET (2 on Apple platforms) or
+    /// AF_INET6 (30) — we collapse those into the family value
+    /// libveil expects (4 for IPv4, 6 for IPv6).
     func writePackets(_ packets: [Data], protocols: [NSNumber]) {
-        // TODO(P4.6): wire to veil_ne_ingest_packets once the cgo
-        // side ships a NetworkExtension-friendly TUN ingestion API.
-        _ = packets; _ = protocols
+        guard handle != 0 else { return }
+        for (idx, packet) in packets.enumerated() {
+            let proto = idx < protocols.count ? protocols[idx].int32Value : Int32(2)
+            let family: Int32 = (proto == 30) ? 6 : 4
+            packet.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+                guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                      raw.count > 0 else { return }
+                _ = veil_ne_ingest_packet(handle, base, Int32(raw.count), family)
+            }
+        }
     }
 
     deinit { stop() }
 
-    // The C callback hops back into Swift through this trampoline.
-    // We marshal the JSON string immediately and dispatch onto the
-    // serial queue; the rest of Swift never observes the goroutine.
-    fileprivate func deliver(jsonCString: UnsafePointer<CChar>?) {
+    // The C callbacks hop back into Swift through these methods.
+    fileprivate func deliverEvent(jsonCString: UnsafePointer<CChar>?) {
         guard let jsonCString = jsonCString else { return }
         let json = String(cString: jsonCString)
         let handler = onEvent
-        queue.async {
-            handler?(json)
-        }
+        queue.async { handler?(json) }
+    }
+
+    fileprivate func deliverPacket(data: UnsafePointer<UInt8>?, len: Int32, family: Int32) {
+        guard let data = data, len > 0 else { return }
+        let buffer = UnsafeBufferPointer(start: data, count: Int(len))
+        let copy = Data(buffer: buffer)
+        let proto = NSNumber(value: family == 6 ? Int32(30) : Int32(2))
+        let emit = onEmit
+        queue.async { emit?(copy, proto) }
     }
 }
 
@@ -108,6 +134,32 @@ private func veil_event_trampoline(
 ) {
     guard let user = user else { return }
     let box = Unmanaged<VeilUserData>.fromOpaque(user).takeUnretainedValue()
-    box.owner?.deliver(jsonCString: json)
-    _ = kind // kind is duplicated inside the JSON payload; we forward the JSON verbatim.
+    box.owner?.deliverEvent(jsonCString: json)
+    _ = kind // duplicated inside the JSON payload
+}
+
+@_cdecl("veil_emit_trampoline")
+private func veil_emit_trampoline(
+    _ data: UnsafePointer<UInt8>?,
+    _ len: Int32,
+    _ family: Int32,
+    _ user: UnsafeMutableRawPointer?
+) {
+    guard let user = user else { return }
+    let box = Unmanaged<VeilUserData>.fromOpaque(user).takeUnretainedValue()
+    box.owner?.deliverPacket(data: data, len: len, family: family)
+}
+
+enum VeilError: LocalizedError {
+    case missingConfig
+    case createFailed
+    case startFailed(Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingConfig:        return "missing veil_config in providerConfiguration"
+        case .createFailed:         return "veil_create returned 0; configuration rejected"
+        case .startFailed(let rc):  return "veil_start returned \(rc)"
+        }
+    }
 }

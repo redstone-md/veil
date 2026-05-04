@@ -49,8 +49,18 @@ android/
 
 ## Status
 
-Phase 4.6 v0 — file layout and the VpnService/bridge skeleton are in
-place but the JNI symbols (`nativeStart`, `nativeStop`) need a
-matching `core/pkg/cgo/jni_android.go` that exposes them. That file
-lands once we settle on a tun2socks crate (going-going for `xjasonlyu/tun2socks`
-which Veil already vendors in spirit through the SOCKS5 layer).
+Phase 4.6 — VpnService, the React Native bridge, and the JNI symbols
+(`nativeStart`, `nativeStop` in `core/pkg/cgo/jni_android.go`) are in
+place. The Kotlin `nativeStart` calls into
+`Java_org_veil_mobile_VeilVpnService_nativeStart`, which in turn
+forwards to `veil_create` + `veil_mobile_start_with_tun` — taking
+ownership of the TUN fd handed in by `VpnService.Builder.establish()`.
+
+The remaining work is the tun2socks engine inside
+`core/internal/mobile`: the file layout already models the fd
+ingestion shape (FDPipe) and the lifetime, but packets the OS
+writes into the TUN are read and currently dropped pending a gVisor
+or `xjasonlyu/tun2socks` integration. Until that lands, the SOCKS5
+listener inside the session is reachable from inside the tunnel
+(handy for tests) but full system-traffic interception is not yet
+exercised end-to-end.

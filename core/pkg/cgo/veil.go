@@ -73,6 +73,7 @@ import (
 	"github.com/redstone-md/veil/core/internal/buildinfo"
 	"github.com/redstone-md/veil/core/internal/client"
 	"github.com/redstone-md/veil/core/internal/config"
+	"github.com/redstone-md/veil/core/internal/mobile"
 )
 
 // instance is the runtime side of one VeilHandle.
@@ -88,6 +89,12 @@ type instance struct {
 	cli     *client.Client
 	cancel  context.CancelFunc
 	running atomic.Bool
+
+	// Mobile-only: TUN pipes attached via veil_mobile_start_with_tun
+	// (Android, fdPipe) or veil_ne_start (iOS, cbPipe). Both are nil
+	// for desktop / CLI sessions.
+	fdPipe *mobile.FDPipe
+	cbPipe *mobile.CallbackPipe
 }
 
 // Registry of live instances keyed by handle.
@@ -225,6 +232,18 @@ func veil_destroy(handle C.uint64_t) {
 	}
 	if inst.running.Load() {
 		veil_stop(handle)
+	}
+	inst.mu.Lock()
+	fd := inst.fdPipe
+	cb := inst.cbPipe
+	inst.fdPipe = nil
+	inst.cbPipe = nil
+	inst.mu.Unlock()
+	if fd != nil {
+		fd.Close()
+	}
+	if cb != nil {
+		cb.Close()
 	}
 	drop(uint64(handle))
 }

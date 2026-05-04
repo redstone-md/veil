@@ -120,6 +120,48 @@ char*       veil_version_string(void);
  */
 void        veil_free_string(char* s);
 
+/*
+ * Mobile / TUN integration.
+ *
+ * The mobile clients (clients/mobile/) have to bridge an OS-supplied
+ * packet tunnel to the Veil session. Two integration shapes are
+ * provided since the two mobile platforms expose tunnels very
+ * differently.
+ *
+ * --- Android (file-descriptor model) ---
+ *
+ * veil_mobile_start_with_tun — like veil_start, plus a TUN file
+ *   descriptor that libveil owns for the lifetime of the session.
+ *   libveil drives a tun2socks pipe between the fd and its internal
+ *   SOCKS5 listener so packets the OS writes to the TUN flow through
+ *   the Veil session and back. Returns the same error codes as
+ *   veil_start; on success the handle behaves identically to a
+ *   handle returned by veil_start.
+ *
+ * --- iOS (callback model) ---
+ *
+ * NEPacketTunnelProvider does not give the host a TUN fd; it gives
+ * read/write callbacks on a NEPacketTunnelFlow. Three calls bridge
+ * that into libveil:
+ *
+ *   veil_ne_start         — start the session and register a callback
+ *                           libveil calls when it has a packet to
+ *                           deliver to the OS.
+ *   veil_ne_ingest_packet — push one IP packet from the OS into the
+ *                           libveil tun2socks pipe.
+ *   veil_ne_emit_callback — function-pointer signature libveil invokes
+ *                           when it produces a packet for the OS.
+ *
+ * Both shapes are no-ops for the SOCKS5-only desktop / CLI flows;
+ * they exist only for the mobile bring-up.
+ */
+typedef void (*VeilEmitPacketCallback)(const uint8_t* data, int len, int family, void* user_data);
+
+int  veil_mobile_start_with_tun(VeilHandle handle, int tun_fd, VeilEventCallback cb, void* user_data);
+
+int  veil_ne_start(VeilHandle handle, VeilEventCallback cb, VeilEmitPacketCallback emit, void* user_data);
+int  veil_ne_ingest_packet(VeilHandle handle, const uint8_t* data, int len, int family);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

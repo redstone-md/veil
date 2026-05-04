@@ -61,6 +61,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     configText: configText,
                     onEvent: { [weak self] ev in
                         self?.forwardEvent(ev)
+                    },
+                    onEmit: { [weak self] data, proto in
+                        // libveil produced an outbound IP packet;
+                        // hand it to NEPacketTunnelFlow which will
+                        // surface it to the OS.
+                        self?.packetFlow.writePackets([data], withProtocols: [proto])
                     }
                 )
                 self?.session = s
@@ -124,16 +130,4 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 }
 
-enum VeilError: LocalizedError {
-    case missingConfig
-    case createFailed
-    case startFailed(Int32)
-
-    var errorDescription: String? {
-        switch self {
-        case .missingConfig:        return "missing veil_config in providerConfiguration"
-        case .createFailed:         return "veil_create returned 0; configuration rejected"
-        case .startFailed(let rc):  return "veil_start returned \(rc)"
-        }
-    }
-}
+// VeilError is declared in VeilSession.swift.

@@ -54,13 +54,28 @@ the UI can be killed without dropping the connection.
 
 ## Status
 
-Phase 4.6 v0 — the JS surface, profile + settings persistence, and
-the platform-side tunnel skeletons are in place. Final-mile work:
+Phase 4.6 — the JS surface, profile + settings persistence, and the
+platform-side tunnel paths are wired end-to-end:
 
-* `core/pkg/cgo/jni_android.go` and `core/pkg/cgo/ne_ios.go` to
-  expose libveil's TUN ingestion API to the platform shims.
-* an Android `VeilBridgeModule.metricsJson` / `libraryVersion`
-  implementation that calls into libveil rather than returning the
-  current placeholder strings.
-* an iOS host-app side bridge that wraps `NETunnelProviderManager`
-  the same way the Android bridge wraps `VpnService.prepare()`.
+* `core/pkg/cgo/mobile.go` exposes `veil_mobile_start_with_tun`
+  (Android, fd model) and `veil_ne_start` /
+  `veil_ne_ingest_packet` / emit-callback (iOS, callback model).
+* `core/pkg/cgo/jni_android.go` provides the JNI symbols the Kotlin
+  `VeilVpnService.nativeStart` / `nativeStop` external functions
+  bind to.
+* `clients/mobile/ios/PacketTunnelProvider/VeilSession.swift` runs
+  the packetFlow ↔ libveil pump using the new ingest + emit-callback
+  API.
+* `clients/mobile/ios/VeilBridge/` is the host-app React Native
+  module wrapping `NETunnelProviderManager` (install / start / stop
+  / sendProviderMessage for metrics + version) and surfacing
+  NEVPNStatusDidChange notifications onto the JS event channel.
+
+The final remaining piece is the tun2socks engine itself: the
+`core/internal/mobile` package models the fd + callback ingestion
+shapes and the lifetime, but packets currently queue and drop
+pending a gVisor or `xjasonlyu/tun2socks` integration. Until that
+lands, the SOCKS5 listener inside the session is reachable from
+inside the tunnel (handy for tests + apps that opt into a SOCKS
+proxy explicitly) but full system-traffic interception is not yet
+exercised end-to-end.
