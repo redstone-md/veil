@@ -40,12 +40,6 @@
       "icons/128x128@2x.png",
       "icons/icon.png",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "resources": {
-        "../../../sdks/veil-rs/veil.dll": "veil.dll",
-        "vendor/wintun.dll": "wintun.dll"
-      }
-    }
+    ]
   }
 }
