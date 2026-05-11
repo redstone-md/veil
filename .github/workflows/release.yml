@@ -14,14 +14,6 @@ name: Release
 # Inspect the run at the Actions tab and the resulting Release at
 # the Releases tab.
 
-# Serialise asset uploads across all three release-emitting workflows
-# (release.yml, installer.yml, desktop-client.yml). softprops/action-
-# gh-release can race itself when several jobs PATCH the same draft's
-# asset metadata in parallel, surfacing as 404-then-fail. The shared
-# group below makes GitHub Actions queue them.
-concurrency:
-  group: gh-release-${{ github.ref }}
-
 on:
   push:
     tags:

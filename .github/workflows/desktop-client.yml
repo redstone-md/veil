@@ -7,11 +7,6 @@ name: Desktop client
 # the build is heavier than `installer/` because it links against
 # the cgo-built libveil.
 
-# Serialise asset uploads across release.yml + installer.yml +
-# desktop-client.yml — see release.yml for the full rationale.
-concurrency:
-  group: gh-release-${{ github.ref }}
-
 on:
   push:
     tags: ["v*"]
