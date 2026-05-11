@@ -19,6 +19,27 @@ Veil is an open-source VPN platform built for environments with active deep-pack
 This repository contains the protocol core, server, command-line client, GUI installer,
 desktop and mobile client apps, deployment recipes, and SDK bindings.
 
+## Download
+
+**Regular users — just connect to a Veil server someone shared with you:**
+
+→ Grab the desktop client from the [latest Release](https://github.com/redstone-md/veil/releases/latest).
+Pick `Veil_*-setup.exe` (Windows), `Veil-*.dmg` (macOS) or `Veil-*.AppImage` / `.deb` (Linux),
+install, paste the `veil://…` link your operator gave you, click Connect.
+
+**Operators — running your own Veil server:**
+
+→ Download the Veil **Installer** from the same release page (look for the
+`Veil.Installer_*` artefacts). It walks you through SSH bring-up, edge-worker
+deployment, and ongoing user / quota management against an existing server.
+
+**Power users / CI / SDK:** the `veil` CLI (server + client + admin in one static
+Go binary) is attached to every release as `veil-{linux,darwin,windows}-{amd64,arm64}`,
+plus a `libveil` shared library + `veil.h` header if you want to embed the protocol
+directly via the Rust / Python / Swift SDK bindings.
+
+---
+
 ## Known limitations (pre-alpha)
 
 The roadmap below tracks what's wired and what isn't. As of this revision, the rough shape:

@@ -3,8 +3,22 @@ name: CI
 on:
   push:
     branches: [main]
+    # Skip CI on docs-only changes — README/CHANGELOG/PRD edits
+    # don't touch any code paths the tests + lint care about.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "design/**"
+      - "LICENSE"
+      - ".gitignore"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "design/**"
+      - "LICENSE"
+      - ".gitignore"
 
 permissions:
   contents: read

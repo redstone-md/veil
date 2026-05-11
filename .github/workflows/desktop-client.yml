@@ -1,0 +1,209 @@
+name: Desktop client
+
+# Cross-platform Tauri build matrix for the user-facing VPN client
+# (clients/desktop), distinct from the operator-facing Installer
+# in installer/. Tag-only by default — same logic as installer.yml:
+# macOS leg costs 10× the minute multiplier on private repos and
+# the build is heavier than `installer/` because it links against
+# the cgo-built libveil.
+
+on:
+  push:
+    tags: ["v*"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "design/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # release uploads
+
+jobs:
+  build:
+    name: build / desktop (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      HAS_APPLE_SIGNING: ${{ secrets.APPLE_SIGNING_IDENTITY != '' }}
+      HAS_WIN_SIGNING:   ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-amd64
+            libveil_name: libveil.so
+            libveil_dest: sdks/veil-rs/libveil.so
+            artifact_glob: |
+              clients/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+              clients/desktop/src-tauri/target/release/bundle/deb/*.deb
+          - os: macos-latest
+            target: darwin-arm64
+            libveil_name: libveil.dylib
+            libveil_dest: sdks/veil-rs/libveil.dylib
+            artifact_glob: |
+              clients/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+              clients/desktop/src-tauri/target/release/bundle/macos/*.app
+          - os: windows-latest
+            target: windows-amd64
+            libveil_name: veil.dll
+            libveil_dest: sdks/veil-rs/veil.dll
+            artifact_glob: |
+              clients/desktop/src-tauri/target/release/bundle/msi/*.msi
+              clients/desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: core/go.mod
+          cache-dependency-path: core/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: clients/desktop/src-tauri
+
+      # Linux: tauri-build needs webkit2gtk + libsoup + ssl headers
+      - name: install Tauri Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            patchelf
+
+      # Windows: cgo wants a C compiler. MSYS2 ucrt64 gcc is the
+      # same toolchain release.yml uses for libveil; use it here
+      # so we get a binary-compatible DLL.
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          install: mingw-w64-ucrt-x86_64-gcc
+          path-type: inherit
+
+      # ---- Build libveil (cgo c-shared) -----------------------
+      # Tauri host links against the platform's libveil at run time
+      # via the veil-rs SDK; the file must sit next to the bundled
+      # binary. We build it here per OS instead of pulling the
+      # release.yml artifact to keep this workflow standalone.
+
+      - name: build libveil (Linux / macOS)
+        if: runner.os != 'Windows'
+        working-directory: core
+        env:
+          CGO_ENABLED: 1
+        run: |
+          go build -trimpath -buildmode=c-shared -ldflags '-s -w' \
+            -o "../${{ matrix.libveil_dest }}" ./pkg/cgo
+
+      - name: build libveil (Windows)
+        if: runner.os == 'Windows'
+        working-directory: core
+        shell: msys2 {0}
+        env:
+          CGO_ENABLED: 1
+        run: |
+          go build -trimpath -buildmode=c-shared -ldflags '-s -w' \
+            -o "../${{ matrix.libveil_dest }}" ./pkg/cgo
+          # Generate the MSVC import library that the veil-rs build
+          # script links against.
+          cd ../sdks/veil-rs
+          dlltool --input-def veil.def --dllname veil.dll --output-lib veil.lib
+
+      - name: install JS deps
+        working-directory: clients/desktop
+        run: npm ci || npm install
+
+      # ---- Optional codesigning ---------------------------------
+      # Same secret + behaviour matrix as installer.yml — see that
+      # file for the full operator walkthrough.
+      - name: prep macOS keychain (signing)
+        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PASS=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASS" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASS" build.keychain
+          security set-keychain-settings -lut 21600 build.keychain
+          echo "$APPLE_CERTIFICATE" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 \
+            -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASS" build.keychain
+          rm -f /tmp/cert.p12
+
+      - name: prep Windows cert (signing)
+        if: runner.os == 'Windows' && env.HAS_WIN_SIGNING == 'true'
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        shell: bash
+        run: |
+          echo "$WINDOWS_CERTIFICATE" | base64 --decode > /tmp/cert.pfx
+          echo "TAURI_WIN_CERT_PATH=/tmp/cert.pfx" >> "$GITHUB_ENV"
+
+      - name: tauri build (signed, macOS)
+        if: runner.os == 'macOS' && env.HAS_APPLE_SIGNING == 'true'
+        working-directory: clients/desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri:build -- --ci
+
+      - name: tauri build (signed, Windows)
+        if: runner.os == 'Windows' && env.HAS_WIN_SIGNING == 'true'
+        working-directory: clients/desktop
+        env:
+          TAURI_WIN_CERT_PATH: ${{ env.TAURI_WIN_CERT_PATH }}
+          TAURI_WIN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: npm run tauri:build -- --ci
+
+      - name: tauri build (unsigned)
+        if: |
+          (runner.os == 'macOS' && env.HAS_APPLE_SIGNING != 'true') ||
+          (runner.os == 'Windows' && env.HAS_WIN_SIGNING != 'true') ||
+          runner.os == 'Linux'
+        working-directory: clients/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: npm run tauri:build -- --ci
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veil-desktop-${{ matrix.target }}
+          path: |
+            ${{ matrix.artifact_glob }}
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ matrix.artifact_glob }}
+          fail_on_unmatched_files: false

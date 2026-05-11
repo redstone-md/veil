@@ -1,12 +1,17 @@
 name: Fuzz
 
-# Nightly fuzz run. Each target gets a short slice of wall-clock so
+# Weekly fuzz run. Each target gets a short slice of wall-clock so
 # the whole job stays well under an hour; long-running fuzz lives
 # elsewhere (OSS-Fuzz integration is on the Phase 5+ roadmap).
+#
+# Bumped from daily → weekly: the seed corpus + parsing surface is
+# stable enough that overnight regressions are vanishingly rare, and
+# weekly runs cut the scheduled-CI footprint by 7×. Manual dispatch
+# stays available for ad-hoc runs after parser changes.
 
 on:
   schedule:
-    - cron: "37 3 * * *" # ~03:37 UTC daily
+    - cron: "37 3 * * 0" # 03:37 UTC every Sunday
   workflow_dispatch: {}
 
 permissions:
