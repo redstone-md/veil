@@ -277,7 +277,8 @@ func mustPair(b *testing.B) (cli, srv *session.Session, cleanup func()) {
 // BenchmarkSessionThroughput measures sustained one-way bytes/sec
 // across a real handshaken session pair. Compare ns/op + MB/s against
 // pre-flow-control baseline:
-//   go test -bench=BenchmarkSessionThroughput -benchtime=3s ./internal/session/
+//
+//	go test -bench=BenchmarkSessionThroughput -benchtime=3s ./internal/session/
 func BenchmarkSessionThroughput(b *testing.B) {
 	cli, srv, cleanup := mustPair(b)
 	defer cleanup()

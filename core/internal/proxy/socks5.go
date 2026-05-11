@@ -28,8 +28,8 @@ const (
 	socks5MethodNone = 0x00
 	socks5MethodFail = 0xFF
 
-	socks5CmdConnect   = 0x01
-	socks5CmdUDPAssoc  = 0x03
+	socks5CmdConnect  = 0x01
+	socks5CmdUDPAssoc = 0x03
 
 	socks5ATYPIPv4   = 0x01
 	socks5ATYPDomain = 0x03
@@ -175,7 +175,7 @@ func (s *SOCKS5Server) handleUDPAssociate(ctx context.Context, c net.Conn) {
 		_ = writeSocksReply(c, socks5RepGeneralFailure)
 		return
 	}
-	defer relay.Close()
+	defer func() { _ = relay.Close() }()
 
 	bound := relay.LocalAddr().(*net.UDPAddr)
 	if err := writeSocksReplyAddr(c, socks5RepSuccess, bound.IP, uint16(bound.Port)); err != nil {
@@ -261,11 +261,13 @@ func writeSocksReplyAddr(c net.Conn, rep byte, ip net.IP, port uint16) error {
 }
 
 // decodeSocksUDPPacket parses the SOCKS5 UDP datagram framing.
-//   +----+------+------+----------+----------+----------+
-//   |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
-//   +----+------+------+----------+----------+----------+
-//   | 2  |   1  |   1  | Variable |     2    | Variable |
-//   +----+------+------+----------+----------+----------+
+//
+//	+----+------+------+----------+----------+----------+
+//	|RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
+//	+----+------+------+----------+----------+----------+
+//	| 2  |   1  |   1  | Variable |     2    | Variable |
+//	+----+------+------+----------+----------+----------+
+//
 // We don't support fragmentation (FRAG must be 0).
 func decodeSocksUDPPacket(b []byte) (frame.Address, []byte, error) {
 	if len(b) < 4 {

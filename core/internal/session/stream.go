@@ -36,7 +36,7 @@ type Stream struct {
 	rxMu       sync.Mutex
 	rxCond     *sync.Cond
 	rxRing     *ringBuf
-	rxFin      bool   // peer has signalled END_STREAM / STREAM_CLOSE
+	rxFin      bool // peer has signalled END_STREAM / STREAM_CLOSE
 	rxErr      error
 	rxClosed   bool   // local consumer abandoned the read side
 	rxWindow   uint32 // window we advertised; same as ring capacity

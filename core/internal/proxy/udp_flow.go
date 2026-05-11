@@ -27,22 +27,22 @@ import (
 // the TCP control conn closes or udpFlowIdleTimeout elapses without
 // traffic.
 type udpFlowMux struct {
-	ctx      context.Context
-	sess     *session.Session
-	relay    *net.UDPConn
-	counter  ByteCounter
-	logger   *slog.Logger
+	ctx     context.Context
+	sess    *session.Session
+	relay   *net.UDPConn
+	counter ByteCounter
+	logger  *slog.Logger
 
 	mu    sync.Mutex
 	flows map[string]*udpFlow
 }
 
 type udpFlow struct {
-	src     *net.UDPAddr
-	dst     frame.Address
-	stream  *session.Stream
-	last    time.Time
-	closed  chan struct{}
+	src    *net.UDPAddr
+	dst    frame.Address
+	stream *session.Stream
+	last   time.Time
+	closed chan struct{}
 }
 
 func newUDPFlowMux(ctx context.Context, sess *session.Session, relay *net.UDPConn, counter ByteCounter, logger *slog.Logger) *udpFlowMux {

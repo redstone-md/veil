@@ -104,7 +104,10 @@ func (d *Dialer) Dial(ctx context.Context, addr string) (transport.Conn, error) 
 	mc := &masque.Client{TLSClientConfig: outerTLS}
 	target := d.cfg.InnerTarget
 	_ = addr // accepted for the transport.Dialer signature; see doc above
-	pc, _, err := mc.DialAddr(ctx, tpl, target)
+	// bodyclose false-positive: mc.DialAddr returns a net.PacketConn
+	// (closed via pc.Close() in every error / done path below), not
+	// an http.Response.
+	pc, _, err := mc.DialAddr(ctx, tpl, target) //nolint:bodyclose
 	if err != nil {
 		_ = mc.Close()
 		return nil, fmt.Errorf("masquetr: dial proxy: %w", err)

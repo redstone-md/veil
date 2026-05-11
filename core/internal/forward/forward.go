@@ -135,7 +135,7 @@ func (s *Server) handleDatagram(ctx context.Context, st *session.Stream, logger 
 		logger.Warn("udp dial failed", "err", err)
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	logger.Info("udp relay open")
 
 	var lastActivity atomic.Int64

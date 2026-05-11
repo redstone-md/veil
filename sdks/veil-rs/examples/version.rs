@@ -4,5 +4,8 @@
 
 fn main() {
     let v = veil::Veil::library_version().expect("library_version");
-    println!("libveil: version={} commit={} date={}", v.version, v.commit, v.date);
+    println!(
+        "libveil: version={} commit={} date={}",
+        v.version, v.commit, v.date
+    );
 }

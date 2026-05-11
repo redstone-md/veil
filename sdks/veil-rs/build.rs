@@ -42,8 +42,8 @@ fn main() {
         let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
         let lib_name = match target_os.as_str() {
             "windows" => "veil.dll",
-            "macos"   => "libveil.dylib",
-            _         => "libveil.so",
+            "macos" => "libveil.dylib",
+            _ => "libveil.so",
         };
 
         let src = Path::new(&lib_dir).join(lib_name);

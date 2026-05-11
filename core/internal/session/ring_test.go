@@ -92,7 +92,8 @@ func TestRingBufFuzzRoundTrip(t *testing.T) {
 
 // BenchmarkRingBufThroughput measures the cost of write+read cycles
 // through the ring vs. the old append-and-slice approach. Run with
-//   go test -bench=BenchmarkRing -benchmem ./internal/session/
+//
+//	go test -bench=BenchmarkRing -benchmem ./internal/session/
 func BenchmarkRingBufThroughput(b *testing.B) {
 	const cap = 1 << 20 // 1 MiB
 	r := newRingBuf(cap)
