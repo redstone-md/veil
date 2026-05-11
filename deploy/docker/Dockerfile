@@ -9,7 +9,7 @@
 # The image runs as a non-root user. Persistent state lives under
 # /var/lib/veil and the configuration under /etc/veil.
 
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.25
 
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
