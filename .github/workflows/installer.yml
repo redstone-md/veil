@@ -9,6 +9,11 @@ name: Installer
 # bundle. Maintainers who want an off-cycle build use
 # workflow_dispatch from the Actions tab.
 
+# Serialise asset uploads across release.yml + installer.yml +
+# desktop-client.yml — see release.yml for the full rationale.
+concurrency:
+  group: gh-release-${{ github.ref }}
+
 on:
   push:
     tags: ["v*"]
