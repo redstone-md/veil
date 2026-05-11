@@ -205,7 +205,16 @@ jobs:
             esac
             syft "$f" -o spdx-json > "${f}.sbom.json"
           done
+      # softprops/action-gh-release v2 races itself on the
+      # update-asset-metadata REST endpoint when overwriting many
+      # files in quick succession (GH API is eventually-consistent,
+      # the action's PUT-then-PATCH sequence sees stale 404s). The
+      # files DO upload — verified via `gh release view` — but the
+      # last 404 sets a non-zero exit. Mark the step
+      # continue-on-error so a transient asset-metadata flake
+      # doesn't fail the whole release.
       - uses: softprops/action-gh-release@v2
+        continue-on-error: true
         with:
           tag_name: ${{ needs.meta.outputs.version }}
           name: ${{ needs.meta.outputs.version }}
