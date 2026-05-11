@@ -41,9 +41,11 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "resources": {
-      "../../../sdks/veil-rs/veil.dll": "veil.dll",
-      "vendor/wintun.dll": "wintun.dll"
+    "windows": {
+      "resources": {
+        "../../../sdks/veil-rs/veil.dll": "veil.dll",
+        "vendor/wintun.dll": "wintun.dll"
+      }
     }
   }
 }

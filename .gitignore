@@ -8,6 +8,9 @@
 *.dylib
 *.a
 *.o
+# Vendored Wintun driver IS source of truth for the desktop client
+# build (CI cannot reproduce its binary signature on its own). Allow.
+!clients/desktop/src-tauri/vendor/wintun.dll
 
 # Go
 /core/vendor/
