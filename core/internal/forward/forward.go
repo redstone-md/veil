@@ -15,10 +15,17 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/redstone-md/veil/core/internal/frame"
 	"github.com/redstone-md/veil/core/internal/session"
 )
+
+// UDPIdleTimeout closes a server-side UDP relay socket after this
+// long without traffic in either direction. Keeps short-lived flows
+// (DNS lookups, STUN probes) from leaking sockets indefinitely.
+const UDPIdleTimeout = 90 * time.Second
 
 // DialTimeout caps the time spent connecting to an upstream target.
 const DialTimeout = 15 * time.Second
@@ -95,6 +102,11 @@ func (s *Server) handle(ctx context.Context, st *session.Stream) {
 		return
 	}
 
+	if st.Type() == frame.StreamTypeDatagram {
+		s.handleDatagram(ctx, st, logger)
+		return
+	}
+
 	upstream, err := s.dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
 		logger.Warn("dial upstream failed", "err", err)
@@ -104,6 +116,95 @@ func (s *Server) handle(ctx context.Context, st *session.Stream) {
 	logger.Info("upstream connected")
 
 	pipe(st, upstream, s.accountant)
+}
+
+// handleDatagram services a Datagram (UDP-relay) stream. Reads len-
+// prefixed records from the stream and forwards each as a UDP packet
+// to st.Target(); reads UDP responses from the same socket and sends
+// them back len-prefixed. The relay socket is closed when the stream
+// closes or after UDPIdleTimeout of inactivity.
+func (s *Server) handleDatagram(ctx context.Context, st *session.Stream, logger *slog.Logger) {
+	target := st.Target().String()
+	udpAddr, err := net.ResolveUDPAddr("udp", target)
+	if err != nil {
+		logger.Warn("udp resolve failed", "err", err)
+		return
+	}
+	conn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		logger.Warn("udp dial failed", "err", err)
+		return
+	}
+	defer conn.Close()
+	logger.Info("udp relay open")
+
+	var lastActivity atomic.Int64
+	lastActivity.Store(time.Now().UnixNano())
+	touch := func() { lastActivity.Store(time.Now().UnixNano()) }
+
+	// Stream → UDP (client → upstream)
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		buf := make([]byte, session.MaxDatagramSize)
+		for {
+			n, err := session.ReadDatagram(st, buf)
+			if err != nil {
+				if !errors.Is(err, io.EOF) && !errors.Is(err, session.ErrStreamClosed) {
+					logger.Debug("udp tx read", "err", err)
+				}
+				return
+			}
+			if s.accountant != nil {
+				if s.accountant.QuotaExceeded() {
+					return
+				}
+				s.accountant.Add("tx", n)
+			}
+			touch()
+			if _, err := conn.Write(buf[:n]); err != nil {
+				logger.Debug("udp tx write", "err", err)
+				return
+			}
+		}
+	}()
+
+	// UDP → Stream (upstream → client)
+	udpDone := make(chan struct{})
+	go func() {
+		defer close(udpDone)
+		buf := make([]byte, session.MaxDatagramSize)
+		for {
+			_ = conn.SetReadDeadline(time.Now().Add(UDPIdleTimeout))
+			n, _, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					// Idle: only exit if the stream side is also quiet.
+					if time.Since(time.Unix(0, lastActivity.Load())) > UDPIdleTimeout {
+						return
+					}
+					continue
+				}
+				logger.Debug("udp rx read", "err", err)
+				return
+			}
+			if s.accountant != nil {
+				s.accountant.Add("rx", n)
+			}
+			touch()
+			if err := session.WriteDatagram(st, buf[:n]); err != nil {
+				logger.Debug("udp rx write", "err", err)
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-streamDone:
+	case <-udpDone:
+	case <-ctx.Done():
+	}
+	_ = conn.Close()
 }
 
 // pipe runs full-duplex io.Copy between a Veil stream and a TCP

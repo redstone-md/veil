@@ -23,11 +23,18 @@
 //   4. On disconnect, tear the routes back down and let the libveil
 //      destroy path close the adapter.
 
+use std::os::raw::{c_char, c_int, c_void};
+use std::os::windows::process::CommandExt;
 use std::process::Command;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager};
 use veil::Veil;
+
+// CREATE_NO_WINDOW — keep child processes (netsh, route, net) from
+// flashing a console window on the user's screen during TUN bring-up.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 const ADAPTER_NAME: &str = "Veil";
 const TUN_IP: &str = "10.42.0.2";
@@ -45,6 +52,91 @@ pub struct TunSession {
     /// so the stop path knows what to clean up.
     pub bypass_routes: Vec<String>,
     pub original_gateway: Option<String>,
+    /// Heap-allocated context the libveil event trampoline reads
+    /// through. Freed on tun_stop AFTER the SDK Drop runs veil_stop +
+    /// veil_destroy, so no late callback can dereference a freed box.
+    cb_ctx: *mut TunCallbackContext,
+}
+
+// SAFETY: TunSession holds a raw pointer to its own boxed context;
+// the pointer is created on tun_start and freed on tun_stop, both of
+// which run on the same thread via Tauri's command runner. The
+// libveil trampoline reads through it from a Go goroutine — that's
+// safe as long as the box outlives every callback invocation, which
+// the explicit veil_stop in tun_stop guarantees.
+unsafe impl Send for TunSession {}
+
+struct TunCallbackContext {
+    app: AppHandle,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct UiEvent {
+    #[serde(rename = "type")]
+    kind: i32,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    transport: String,
+    #[serde(default)]
+    remote: String,
+    #[serde(default)]
+    bytes_tx: i64,
+    #[serde(default)]
+    bytes_rx: i64,
+}
+
+unsafe extern "C" fn tun_event_trampoline(kind: c_int, json: *const c_char, user: *mut c_void) {
+    if user.is_null() {
+        return;
+    }
+    let ctx = &*(user as *const TunCallbackContext);
+    // libveil's payload mirrors the SDK Event struct; reuse its keys
+    // exactly so the JS frontend's existing "veil-event" decoder
+    // doesn't need a special case for the TUN path.
+    let mut ev = UiEvent { kind: kind as i32, ..Default::default() };
+    if !json.is_null() {
+        if let Ok(s) = std::ffi::CStr::from_ptr(json).to_str() {
+            if let Ok(parsed) = serde_json::from_str::<UiEvent>(s) {
+                ev = UiEvent { kind: kind as i32, ..parsed };
+            }
+        }
+    }
+    let app = ctx.app.clone();
+    let kind_i = kind as i32;
+    // Hop onto the async runtime so the Tauri IPC emit isn't called
+    // from the Go scheduler thread (mirrors what veil_start does).
+    tauri::async_runtime::spawn(async move {
+        let _ = app.emit("veil-event", ev);
+        // P1 fail-safe: if the tunnel hits a fatal Error or an
+        // unexpected Disconnect while routes are still installed,
+        // tear the routes down ourselves. Without this the Wintun
+        // adapter stays as the OS default route and ALL outbound
+        // traffic blackholes — user loses internet entirely until
+        // they hit Disconnect manually.
+        if kind_i == 3 {
+            auto_teardown(&app).await;
+        }
+    });
+}
+
+/// Pull the live TUN session out of state and run tun_stop on it.
+/// Idempotent — if no session is parked, returns silently.
+async fn auto_teardown(app: &AppHandle) {
+    use tauri::Manager;
+    let session = {
+        let ts = app.state::<TunState>();
+        let mut g = ts.inner.lock().expect("TunState mutex poisoned");
+        g.take()
+    };
+    if let Some(session) = session {
+        // Run on blocking pool — tun_stop calls netsh / route which
+        // would block the async runtime worker otherwise.
+        let _ = tauri::async_runtime::spawn_blocking(move || tun_stop(session)).await;
+        // Tell the UI the session is gone so the orb flips out of
+        // "error" into a clean disconnected state.
+        let _ = app.emit("veil-event", UiEvent { kind: 2, ..Default::default() });
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -82,13 +174,37 @@ extern "C" {
     ) -> i32;
 }
 
+/// One bring-up step. Frontend listens on the "tun-progress" event
+/// and renders the label as the connection-status sub-line.
+#[derive(Debug, Clone, Serialize)]
+pub struct TunProgress {
+    /// 1-based step index.
+    pub step: u32,
+    /// Total steps so the UI can render "3/7".
+    pub total: u32,
+    /// Short imperative phrase: "Probing default gateway".
+    pub label: &'static str,
+}
+
+const STAGES: u32 = 6;
+
+fn emit(app: &AppHandle, step: u32, label: &'static str) {
+    let _ = app.emit("tun-progress", TunProgress { step, total: STAGES, label });
+}
+
 /// Start a TUN-mode session. Returns Err with an actionable message
-/// when prerequisites are missing.
-pub fn tun_start(args: TunStartArgs) -> Result<(TunStatus, TunSession), String> {
+/// when prerequisites are missing. Emits a "tun-progress" Tauri event
+/// at every stage so the UI can render a multi-step progress strip.
+pub fn tun_start(app: &AppHandle, args: TunStartArgs) -> Result<(TunStatus, TunSession), String> {
     if !is_elevated() {
+        // Frontend usually catches this case via the `elevation_status`
+        // pre-flight + UAC prompt, but if anything reaches here with-
+        // out admin (e.g. a tray-triggered connect) we still bubble a
+        // useful message rather than the raw wintun ERROR_ACCESS_DENIED.
         return Err(
-            "TUN mode requires running Veil as Administrator. \
-             Right-click the Veil icon → Run as administrator, then try again."
+            "TUN mode needs admin rights. The app should pop a UAC \
+             prompt automatically — if it didn't, restart Veil with \
+             elevated privileges."
                 .into(),
         );
     }
@@ -103,12 +219,14 @@ pub fn tun_start(args: TunStartArgs) -> Result<(TunStatus, TunSession), String> 
     // 0. Capture the OS's existing default gateway BEFORE we install
     //    the Wintun-pointing default; we need it for every bypass
     //    route we install in step 2.
+    emit(app, 1, "Probing default gateway");
     let original_gw = original_default_gateway();
     let original_gw_str = original_gw
         .clone()
         .ok_or_else(|| "Could not determine the existing default gateway. Are you online?".to_string())?;
 
     // 1. Veil::create — same C ABI as SOCKS5 mode.
+    emit(app, 2, "Initializing tunnel core");
     let v = Veil::create(&args.config_text).map_err(|e| format!("create: {e}"))?;
 
     // 2. Compute the bypass route set: server IPs (mandatory — without
@@ -132,6 +250,7 @@ pub fn tun_start(args: TunStartArgs) -> Result<(TunStatus, TunSession), String> 
 
     // Install bypass routes BEFORE the Wintun default — they have
     // metric=1 so they always win over the metric=5 default.
+    emit(app, 3, "Installing bypass routes");
     for cidr in &bypass {
         if let Err(e) = add_bypass_route(cidr, &original_gw_str) {
             // Log but don't abort; one bad CIDR shouldn't kill the
@@ -144,14 +263,26 @@ pub fn tun_start(args: TunStartArgs) -> Result<(TunStatus, TunSession), String> 
     //    Wintun entry point. The handle is stable for the lifetime
     //    of the Veil; we still bind veil_start through the SDK so
     //    Drop runs the matching veil_stop / veil_destroy.
+    emit(app, 4, "Creating Wintun adapter");
     let handle = v.raw_handle();
     let adapter_c = std::ffi::CString::new(ADAPTER_NAME).unwrap();
+    // Heap-allocate the callback context so its address is stable
+    // across the FFI call. Dropped on tun_stop AFTER veil_stop has
+    // ensured no further events can fire.
+    let cb_ctx = Box::into_raw(Box::new(TunCallbackContext { app: app.clone() }));
     let rc = unsafe {
-        veil_desktop_start_with_wintun(handle, adapter_c.as_ptr(), 1380, None, std::ptr::null_mut())
+        veil_desktop_start_with_wintun(
+            handle,
+            adapter_c.as_ptr(),
+            1380,
+            Some(tun_event_trampoline),
+            cb_ctx as *mut c_void,
+        )
     };
     if rc != 0 {
-        // Clean up the bypass routes we already installed before
-        // bubbling the error up.
+        // Free the context we never got to use, then unwind the
+        // bypass routes before bubbling the error up.
+        unsafe { drop(Box::from_raw(cb_ctx)); }
         for cidr in &bypass {
             let _ = del_bypass_route(cidr, &original_gw_str);
         }
@@ -159,7 +290,14 @@ pub fn tun_start(args: TunStartArgs) -> Result<(TunStatus, TunSession), String> 
     }
 
     // 4. Assign the adapter an IP and install the default route.
+    emit(app, 5, "Configuring routes & DNS");
     configure_adapter()?;
+    emit(app, 6, "Tunnel up");
+
+    // Synthesize a Connected event so the UI moves out of the
+    // "connecting" state immediately, in case libveil hasn't fired
+    // its own kind=1 event by the time we return.
+    let _ = app.emit("veil-event", UiEvent { kind: 1, ..Default::default() });
 
     let status = TunStatus {
         active: true,
@@ -172,6 +310,7 @@ pub fn tun_start(args: TunStartArgs) -> Result<(TunStatus, TunSession), String> 
         veil: v,
         bypass_routes: bypass,
         original_gateway: Some(original_gw_str),
+        cb_ctx,
     };
     Ok((status, session))
 }
@@ -192,8 +331,13 @@ pub fn tun_stop(session: TunSession) -> Result<(), String> {
     //    cleanup so a torn-down session leaves the table clean.
     let _ = restore_routes();
     // 3. Drop the Veil — runs veil_stop + veil_destroy → WintunPipe
-    //    → adapter handle released.
+    //    → adapter handle released. After this returns no further
+    //    libveil events can fire so it's safe to free cb_ctx.
+    let cb_ctx = session.cb_ctx;
     drop(session.veil);
+    if !cb_ctx.is_null() {
+        unsafe { drop(Box::from_raw(cb_ctx)); }
+    }
     Ok(())
 }
 
@@ -283,6 +427,7 @@ fn prefix_to_mask(prefix: u8) -> String {
 fn original_default_gateway() -> Option<String> {
     let out = Command::new("route")
         .args(["print", "0.0.0.0"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
@@ -305,6 +450,7 @@ fn original_default_gateway() -> Option<String> {
 fn sh(cmd: &str, args: &[&str]) -> Result<(), String> {
     let out = Command::new(cmd)
         .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("exec {cmd}: {e}"))?;
     if !out.status.success() {
@@ -317,17 +463,20 @@ fn sh(cmd: &str, args: &[&str]) -> Result<(), String> {
 }
 
 fn is_elevated() -> bool {
-    // Cheap check: try to open a known-protected key (HKLM\SYSTEM\…)
-    // for write. Wintun needs adapter-create which requires Admin;
-    // ServiceControlManager open with SC_MANAGER_CREATE_SERVICE is
-    // a stricter probe but this one is enough for the UX gate.
-    use std::process::Command;
+    // Cheap check: `net session` only succeeds when running with
+    // admin rights — same probe as the wintun adapter create needs.
     Command::new("net")
         .args(["session"])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
 }
+
+// is_elevated_pub re-exports the local probe so lib.rs can answer
+// the `elevation_status` Tauri command without duplicating the
+// `net session` round-trip.
+pub fn is_elevated_pub() -> bool { is_elevated() }
 
 fn wintun_dll_present() -> bool {
     if let Ok(exe) = std::env::current_exe() {

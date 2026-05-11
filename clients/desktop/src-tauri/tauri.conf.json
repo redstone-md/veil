@@ -30,7 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "category": "Network",
+    "category": "Utility",
     "shortDescription": "Veil VPN client",
     "longDescription": "Self-hosted, censorship-resistant VPN client.",
     "targets": "all",
@@ -40,6 +40,10 @@
       "icons/128x128@2x.png",
       "icons/icon.png",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../../../sdks/veil-rs/veil.dll": "veil.dll",
+      "vendor/wintun.dll": "wintun.dll"
+    }
   }
 }

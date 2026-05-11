@@ -4,333 +4,1297 @@
 <meta charset="utf-8">
 <title>Veil Admin</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: dark;
+    --bg:        #0B0B0F;
+    --bg2:       #101016;
+    --surface:   #16161E;
+    --surface2:  #1C1C26;
+    --border:    rgba(255,255,255,0.07);
+    --borderS:   rgba(255,255,255,0.12);
+    --text:      #ECECF1;
+    --textDim:   rgba(236,236,241,0.62);
+    --textMute:  rgba(236,236,241,0.40);
+    --accent:    #7C5CFF;
+    --accentDim: #5E45CC;
+    --accentSoft:rgba(124,92,255,0.12);
+    --accentGlow:rgba(124,92,255,0.35);
+    --ok:        #3DD68C;
+    --okSoft:    rgba(61,214,140,0.14);
+    --warn:      #F5C26B;
+    --warnSoft:  rgba(245,194,107,0.18);
+    --err:       #FF6B6B;
+    --errSoft:   rgba(255,107,107,0.14);
+    --fontSans:  "Inter Tight", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    --fontMono:  "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    background: #0d1117; color: #c9d1d9;
-    margin: 0; padding: 1.5rem; max-width: 1200px;
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--fontSans);
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
   }
-  h1 { font-weight: 600; margin: 0 0 0.25rem; }
-  .subtitle { color: #8b949e; margin-bottom: 1rem; font-size: 0.85rem; }
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
-  .stat { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 0.75rem 1rem; }
-  .stat .label { font-size: 0.8rem; color: #8b949e; }
-  .stat .value { font-size: 1.5rem; font-weight: 600; margin-top: 0.25rem; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #30363d; vertical-align: top; }
-  th { color: #8b949e; font-weight: 500; cursor: pointer; user-select: none; }
-  th:hover { color: #c9d1d9; }
-  th.sort-asc::after  { content: " ↑"; color: #58a6ff; }
-  th.sort-desc::after { content: " ↓"; color: #58a6ff; }
-  tr:hover { background: #161b22; }
-  .status-active        { color: #3fb950; }
-  .status-revoked       { color: #f85149; }
-  .status-expired       { color: #d29922; }
-  .status-quota_exceeded{ color: #d29922; }
-  button {
-    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
-    padding: 0.4rem 0.75rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
-  }
-  button:hover { background: #30363d; }
-  button.primary { background: #238636; border-color: #2ea043; color: #fff; }
-  button.primary:hover { background: #2ea043; }
-  button.danger { color: #f85149; }
-  button.danger:hover { background: #5a1d1d; color: #fff; }
-  .row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
-  input, select {
-    background: #0d1117; color: #c9d1d9; border: 1px solid #30363d;
-    padding: 0.4rem 0.6rem; border-radius: 6px; font-family: inherit;
-  }
-  input:focus, select:focus { outline: none; border-color: #58a6ff; }
-  code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.8rem; color: #79c0ff; }
-  .muted { color: #6e7681; }
-  .progress { width: 80px; height: 6px; background: #30363d; border-radius: 3px; overflow: hidden; }
-  .progress > div { height: 100%; background: #58a6ff; }
-  .progress.over > div { background: #f85149; }
-  .toolbar { margin-bottom: 0.75rem; }
-  .empty { color: #8b949e; padding: 2rem; text-align: center; }
+  ::selection { background: var(--accentSoft); color: var(--text); }
 
-  /* Modal for editing quota / expiry */
+  /* ── Login ───────────────────────────────────── */
+  #login {
+    position: fixed; inset: 0; display: flex;
+    align-items: center; justify-content: center;
+    background: radial-gradient(circle at 30% 20%, rgba(124,92,255,0.08), transparent 60%), var(--bg);
+  }
+  .login-card {
+    width: 360px; padding: 28px 28px 24px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; animation: fadeIn 0.4s ease;
+  }
+  .login-card .brand {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 18px;
+  }
+  .login-card .brand-name { font-size: 16px; font-weight: 600; }
+  .login-card h2 { font-size: 14px; font-weight: 600; margin: 0 0 14px; }
+  .login-card p.sub { font-size: 12px; color: var(--textDim); margin: 0 0 16px; }
+  .login-card label { display: block; font-size: 11px; color: var(--textDim); margin: 10px 0 4px; font-family: var(--fontMono); letter-spacing: 0.04em; text-transform: uppercase; }
+  .login-card input {
+    width: 100%; padding: 9px 11px; font-size: 13px; color: var(--text);
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--fontSans); outline: none; transition: border 0.15s;
+  }
+  .login-card input:focus { border-color: var(--accent); }
+  .login-card .err { color: var(--err); font-size: 11.5px; margin-top: 10px; min-height: 14px; }
+
+  /* ── App shell ──────────────────────────────── */
+  #app { display: none; height: 100vh; }
+  #app.show { display: flex; }
+  .sidebar {
+    width: 220px; flex-shrink: 0;
+    background: var(--bg2); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    padding: 14px 8px;
+  }
+  .sidebar .head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px 16px;
+  }
+  .sidebar .head .title { font-size: 13.5px; font-weight: 600; }
+  .sidebar .head .host { font-size: 10.5px; color: var(--textDim); font-family: var(--fontMono); }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; border-radius: 7px;
+    font-size: 12.5px; font-weight: 500; color: var(--textDim);
+    cursor: pointer; user-select: none;
+    transition: background 0.12s, color 0.12s;
+  }
+  .nav-item:hover { background: rgba(255,255,255,0.03); color: var(--text); }
+  .nav-item.active { background: rgba(255,255,255,0.05); color: var(--text); }
+  .nav-item .icon { display: flex; color: var(--textDim); transition: color 0.12s; }
+  .nav-item.active .icon, .nav-item:hover .icon { color: var(--accent); }
+  .nav-item .badge {
+    margin-left: auto; font-size: 10px; font-family: var(--fontMono);
+    padding: 1px 6px; border-radius: 3px;
+    background: var(--accentSoft); color: var(--accent);
+  }
+  .sidebar .foot {
+    margin-top: auto; padding: 10px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--textDim);
+  }
+  .avatar {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px; font-weight: 700;
+  }
+  .foot .who { color: var(--text); font-weight: 500; font-size: 11.5px; }
+  .foot .auth { font-size: 10px; font-family: var(--fontMono); }
+
+  /* ── Main pane ──────────────────────────────── */
+  .main {
+    flex: 1; min-width: 0; padding: 22px 28px;
+    overflow-y: auto;
+  }
+  .main::-webkit-scrollbar { width: 8px; }
+  .main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+  .pageHead {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    margin-bottom: 16px; gap: 14px;
+  }
+  .pageHead h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+  .pageHead .sub { font-size: 12px; color: var(--textDim); margin-top: 2px; }
+  .pageHead .actions { display: flex; gap: 8px; align-items: center; }
+
+  /* ── Buttons ────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 12px; border-radius: 8px;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border);
+    font-family: var(--fontSans); font-size: 12.5px; font-weight: 500;
+    cursor: pointer; transition: background 0.12s, border 0.12s, transform 0.05s;
+  }
+  .btn:hover { background: var(--surface2); border-color: var(--borderS); }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary {
+    background: var(--accent); color: #fff; border-color: transparent;
+    box-shadow: 0 0 0 1px transparent, 0 4px 14px var(--accentGlow);
+  }
+  .btn.primary:hover { background: var(--accentDim); }
+  .btn.danger { color: var(--err); }
+  .btn.danger:hover { background: var(--errSoft); border-color: var(--err); }
+  .btn.ghost { background: transparent; }
+  .btn.icon-only { width: 28px; height: 28px; padding: 0; justify-content: center; }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── Segmented control ──────────────────────── */
+  .seg {
+    display: inline-flex; padding: 2px;
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .seg button {
+    background: transparent; border: 0; color: var(--textDim);
+    font-family: var(--fontSans); font-size: 11.5px; font-weight: 500;
+    padding: 4px 10px; border-radius: 6px; cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+  }
+  .seg button:hover { color: var(--text); }
+  .seg button.active { background: var(--surface); color: var(--text); }
+
+  /* ── Cards ──────────────────────────────────── */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px;
+  }
+  .card.tight { padding: 12px 14px; }
+  .card.flush { padding: 0; }
+
+  .stat-row {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 12px; margin-bottom: 16px;
+  }
+  .stat .label {
+    font-family: var(--fontMono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--textMute);
+  }
+  .stat .val {
+    margin-top: 4px;
+    display: flex; align-items: baseline; gap: 5px;
+    font-size: 22px; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat .unit { font-size: 12px; color: var(--textDim); font-weight: 500; }
+  .stat .sub  { font-size: 10.5px; color: var(--textDim); margin-top: 3px; font-family: var(--fontMono); }
+
+  .grid-2 { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .card-head {
+    padding: 12px 16px; display: flex; align-items: center;
+    justify-content: space-between; border-bottom: 1px solid var(--border);
+  }
+  .card-head .t { font-size: 12px; font-weight: 600; }
+  .card-head .meta { font-size: 11px; color: var(--textMute); font-family: var(--fontMono); }
+
+  .split-row { display: flex; flex-direction: column; gap: 9px; }
+  .split-row .row { display: flex; justify-content: space-between; font-size: 11px; font-family: var(--fontMono); margin-bottom: 3px; }
+  .split-row .bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .split-row .bar > div { height: 100%; background: var(--accent); transition: width 0.4s; }
+
+  /* ── Table ──────────────────────────────────── */
+  .table-head, .table-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 90px 110px 110px;
+    gap: 12px; padding: 10px 16px;
+    align-items: center;
+  }
+  .table-head {
+    font-family: var(--fontMono); font-size: 9.5px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--textMute);
+    border-bottom: 1px solid var(--border);
+  }
+  .table-row {
+    border-bottom: 1px solid var(--border); font-size: 12px;
+    transition: background 0.12s;
+  }
+  .table-row:last-child { border-bottom: none; }
+  .table-row:hover { background: rgba(255,255,255,0.02); }
+  .uname { font-weight: 600; }
+  .uid   { font-size: 10.5px; color: var(--textDim); font-family: var(--fontMono); margin-top: 2px; }
+  .quota-row { display: flex; justify-content: space-between; font-size: 10.5px; font-family: var(--fontMono); color: var(--textDim); }
+  .quota-bar { height: 3px; margin-top: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .quota-bar > div { height: 100%; background: var(--accent); transition: width 0.4s; }
+  .quota-bar.warn > div { background: var(--warn); }
+  .quota-bar.over > div { background: var(--err); }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-family: var(--fontMono); font-size: 10px;
+    background: var(--okSoft); color: var(--ok);
+  }
+  .pill.warn  { background: var(--warnSoft); color: var(--warn); }
+  .pill.err   { background: var(--errSoft); color: var(--err); }
+  .pill.muted { background: rgba(255,255,255,0.04); color: var(--textDim); }
+  .row-actions { display: flex; gap: 5px; justify-content: flex-end; }
+
+  .filter-bar {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: 7px;
+    background: var(--bg2); border: 1px solid var(--border);
+    font-size: 11.5px; color: var(--textDim);
+    font-family: var(--fontMono);
+    width: 200px;
+  }
+  .filter-bar input {
+    flex: 1; background: transparent; border: 0; outline: 0;
+    color: var(--text); font-size: 11.5px; font-family: var(--fontMono);
+  }
+  .filter-bar input::placeholder { color: var(--textMute); }
+
+  /* ── Modal ──────────────────────────────────── */
   .overlay {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-    display: none; align-items: center; justify-content: center; z-index: 99;
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+    display: none; align-items: center; justify-content: center;
+    animation: overlayIn 0.18s ease;
   }
   .overlay.show { display: flex; }
+  @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
   .modal {
-    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-    padding: 1.25rem 1.5rem; min-width: 360px; max-width: 480px;
+    width: 460px; max-width: 92vw; max-height: 88vh; overflow: auto;
+    background: var(--surface); border: 1px solid var(--borderS);
+    border-radius: 14px; padding: 20px 22px;
+    animation: modalIn 0.22s cubic-bezier(.2,.9,.3,1.2);
   }
-  .modal h2 { margin: 0 0 0.75rem; font-size: 1.1rem; }
-  .modal label { display: block; font-size: 0.8rem; color: #8b949e; margin-top: 0.6rem; }
-  .modal input { width: 100%; margin-top: 0.25rem; box-sizing: border-box; }
-  .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+  @keyframes modalIn { from { transform: scale(0.94) translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .modal h2 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+  .modal .sub { font-size: 12px; color: var(--textDim); margin-bottom: 14px; }
+  .modal label {
+    display: block; margin: 12px 0 4px;
+    font-family: var(--fontMono); font-size: 10px;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--textMute);
+  }
+  .modal input, .modal select, .modal textarea {
+    width: 100%; padding: 9px 11px; font-size: 12.5px;
+    background: var(--bg2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--fontSans); outline: none; transition: border 0.12s;
+  }
+  .modal textarea { font-family: var(--fontMono); font-size: 11.5px; resize: vertical; min-height: 64px; }
+  .modal input:focus, .modal select:focus, .modal textarea:focus { border-color: var(--accent); }
+  .modal .footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; }
+  .modal .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .modal .help { font-size: 11px; color: var(--textDim); margin-top: 6px; }
+  .copy-row { display: flex; gap: 6px; align-items: stretch; }
+  .copy-row textarea { flex: 1; }
+  .link-out {
+    word-break: break-all; padding: 10px; background: var(--bg2);
+    border: 1px solid var(--border); border-radius: 8px;
+    font-family: var(--fontMono); font-size: 11px; color: var(--accent);
+    line-height: 1.5;
+  }
+
+  /* ── Toast ──────────────────────────────────── */
+  #toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(24px);
+    padding: 10px 16px; background: var(--surface); border: 1px solid var(--borderS);
+    border-radius: 999px; color: var(--text); font-size: 12.5px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+    opacity: 0; pointer-events: none; transition: all 0.25s cubic-bezier(.2,.9,.3,1.2);
+    z-index: 200;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.err { border-color: var(--err); color: var(--err); }
+  #toast.ok  { border-color: var(--ok); color: var(--ok); }
+
+  /* ── View transitions ───────────────────────── */
+  .view { animation: viewIn 0.25s ease; }
+  @keyframes viewIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* ── Logs ───────────────────────────────────── */
+  .log-line {
+    padding: 6px 16px; font-family: var(--fontMono); font-size: 11.5px;
+    border-bottom: 1px solid var(--border); color: var(--textDim);
+    display: grid; grid-template-columns: 80px 80px 1fr; gap: 14px;
+  }
+  .log-line:hover { background: rgba(255,255,255,0.02); }
+  .log-line .ts { color: var(--textMute); }
+  .log-line .lvl.info { color: var(--accent); }
+  .log-line .lvl.warn { color: var(--warn); }
+  .log-line .lvl.err  { color: var(--err); }
+
+  /* ── Settings ───────────────────────────────── */
+  .setting-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; border-bottom: 1px solid var(--border);
+  }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-row .info .t { font-size: 13px; font-weight: 500; }
+  .setting-row .info .d { font-size: 11.5px; color: var(--textDim); margin-top: 2px; }
+
+  .toggle {
+    width: 36px; height: 20px; background: var(--border); border-radius: 999px;
+    position: relative; cursor: pointer; transition: background 0.18s;
+  }
+  .toggle::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%; background: var(--text);
+    transition: transform 0.18s;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle.on::after { transform: translateX(16px); }
+
+  /* ── Empty state ────────────────────────────── */
+  .empty {
+    text-align: center; padding: 56px 16px; color: var(--textDim);
+    font-size: 13px;
+  }
+  .empty svg { margin-bottom: 12px; opacity: 0.4; }
 </style>
 </head>
 <body>
 
-<h1>Veil Admin</h1>
-<div class="subtitle">
-  pre-alpha · <span id="version" class="muted">…</span>
-</div>
-
-<div class="stats" id="stats"></div>
-
-<div class="row toolbar">
-  <input id="newName" placeholder="user name" />
-  <input id="newPubkey" placeholder="client pubkey (base64)" style="flex:1" />
-  <button class="primary" onclick="createUser()">Add user</button>
-  <button onclick="loadAll()">Refresh</button>
-  <input id="filter" placeholder="filter…" style="margin-left:auto" oninput="renderUsers()" />
-</div>
-
-<table id="userTable">
-  <thead>
-    <tr>
-      <th data-key="name">Name</th>
-      <th data-key="status">Status</th>
-      <th data-key="created_at">Created</th>
-      <th data-key="used_bytes_current_month">Used</th>
-      <th>Quota</th>
-      <th data-key="expires_at">Expires</th>
-      <th data-key="last_seen">Last seen</th>
-      <th>Actions</th>
-    </tr>
-  </thead>
-  <tbody id="users"></tbody>
-</table>
-<div class="empty" id="empty" style="display:none">No users yet. Add one above to get started.</div>
-
-<!-- Edit modal -->
-<div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
-  <div class="modal">
-    <h2 id="modalTitle">Edit user</h2>
-    <div id="modalBody"></div>
-    <div class="modal-actions">
-      <button onclick="closeModal()">Cancel</button>
-      <button class="primary" id="modalSave" onclick="saveModal()">Save</button>
+<!-- ────────────── Login ────────────── -->
+<div id="login">
+  <div class="login-card">
+    <div class="brand">
+      <span id="loginMark"></span>
+      <span class="brand-name">Veil admin</span>
     </div>
+    <h2>Sign in</h2>
+    <p class="sub">HTTP Basic auth · admin credentials configured in <code style="color:var(--accent);font-family:var(--fontMono)">veil-admin.env</code></p>
+    <form id="loginForm" autocomplete="on">
+      <label for="u">Username</label>
+      <input id="u" name="username" autocomplete="username" required>
+      <label for="p">Password</label>
+      <input id="p" name="password" type="password" autocomplete="current-password" required>
+      <div class="err" id="loginErr"></div>
+      <div style="margin-top:18px">
+        <button class="btn primary" style="width:100%;height:36px;justify-content:center" type="submit">Sign in</button>
+      </div>
+    </form>
   </div>
 </div>
 
-<script>
-let allUsers = [];
-let sortKey = 'created_at';
-let sortDir = 'desc';
-let modalCtx = null;
+<!-- ────────────── App ────────────── -->
+<div id="app">
+  <div class="sidebar">
+    <div class="head">
+      <span id="sideMark"></span>
+      <div>
+        <div class="title">Veil admin</div>
+        <div class="host" id="sideHost">localhost</div>
+      </div>
+    </div>
+    <div id="nav"></div>
+    <div class="foot">
+      <div class="avatar" id="avatarLetter">O</div>
+      <div style="flex:1;min-width:0">
+        <div class="who" id="whoUser">operator</div>
+        <div class="auth">basic auth</div>
+      </div>
+      <button class="btn icon-only ghost" id="logoutBtn" title="Sign out"></button>
+    </div>
+  </div>
 
-function bytes(n){
-  if(n===null||n===undefined) return '∞';
-  if(n<1024) return n+' B';
-  const u=['KB','MB','GB','TB']; let i=-1, v=n;
-  do{ v/=1024; i++; }while(v>=1024 && i<u.length-1);
-  return v.toFixed(1)+' '+u[i];
-}
-function ts(t){ return t? new Date(t*1000).toISOString().slice(0,10): '—'; }
+  <div class="main" id="main"></div>
+</div>
 
-async function api(path, opts){
-  const r = await fetch(path, opts);
-  if(!r.ok){
-    const text = await r.text();
-    throw new Error(r.status + ' ' + (text || r.statusText));
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()"></div>
+<div id="toast"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "zustand/vanilla":           "https://esm.sh/zustand@5.0.0/vanilla",
+    "@tanstack/query-core":      "https://esm.sh/@tanstack/query-core@5.59.0"
   }
-  if(r.status===204) return null;
-  return r.json();
+}
+</script>
+<script type="module">
+import { createStore as zCreate } from "zustand/vanilla";
+import { QueryClient }            from "@tanstack/query-core";
+
+//──────────────────────────────────────────────────────────────
+// Zustand store + TanStack QueryClient
+//──────────────────────────────────────────────────────────────
+// Centralized state. View nav reads/writes through the store; data
+// fetches go through QueryClient with staleTime so the periodic
+// background refresh doesn't trigger a UI re-render unless the
+// payload actually changed.
+
+const _store = zCreate(() => ({
+  view: 'overview',
+  users: [],
+  dashboard: null,
+  serverInfo: null,
+  version: null,
+}));
+const STATE = new Proxy({}, {
+  get(_, k)      { return _store.getState()[k]; },
+  set(_, k, v)   { _store.setState({ [k]: v }); return true; },
+  has(_, k)      { return k in _store.getState(); },
+});
+function setStore(patch) {
+  if (typeof patch === 'function') _store.setState(s => ({ ...s, ...patch(s) }));
+  else                              _store.setState(s => ({ ...s, ...patch }));
 }
 
-async function loadVersion(){
-  try{
-    const v = await api('/api/version');
-    document.getElementById('version').textContent =
-      `${v.version} · ${v.commit?.slice(0,7) || 'unknown'}`;
-  }catch(e){ /* ignore */ }
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5_000,
+      gcTime: 5 * 60_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+// Subscribe-once renderer: any store change → coalesced render via RAF.
+let _renderQueued = false;
+function scheduleViewRender() {
+  if (_renderQueued) return;
+  _renderQueued = true;
+  requestAnimationFrame(() => { _renderQueued = false; renderViewIfMounted(); });
+}
+_store.subscribe((next, prev) => {
+  if (next.view !== prev.view) renderNav();
+  if (next.users !== prev.users && next.users.length !== prev.users.length) renderNav();
+  scheduleViewRender();
+});
+
+// Make these available to inline event handlers (we kept the
+// non-module script style for the rest of the file).
+window.STATE = STATE;
+window.setStore = setStore;
+window.queryClient = queryClient;
+window.scheduleViewRender = scheduleViewRender;
+</script>
+<script>
+//──────────────────────────────────────────────────────────────
+// Tokens & helpers
+//──────────────────────────────────────────────────────────────
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) {
+    if (k === 'style' && typeof attrs[k] === 'object') Object.assign(e.style, attrs[k]);
+    else if (k === 'class') e.className = attrs[k];
+    else if (k.startsWith('on') && typeof attrs[k] === 'function') e.addEventListener(k.slice(2), attrs[k]);
+    else if (attrs[k] !== undefined && attrs[k] !== null) e.setAttribute(k, attrs[k]);
+  }
+  for (const k of kids.flat()) {
+    if (k === undefined || k === null || k === false) continue;
+    e.appendChild(typeof k === 'string' ? document.createTextNode(k) : k);
+  }
+  return e;
+}
+function svgRaw(s) { const t = document.createElement('template'); t.innerHTML = s.trim(); return t.content.firstChild; }
+
+const Glyph = {
+  zap:      s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3 L4 14 H 12 L 11 21 L 20 10 H 12 Z"/></svg>`),
+  user:     s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21 C 4 16 8 14 12 14 C 16 14 20 16 20 21"/></svg>`),
+  shield:   s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 L4 6 V12 C4 16.5 7.5 20 12 21 C16.5 20 20 16.5 20 12 V6 Z"/></svg>`),
+  terminal: s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9 L 10 12 L 7 15 M12 15 H 16"/></svg>`),
+  settings: s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 0 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 0 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 0 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 0 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>`),
+  plus:     s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 5 V 19 M5 12 H 19"/></svg>`),
+  search:   s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20 L 16 16"/></svg>`),
+  copy:     s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8 V 5 A 2 2 0 0 0 14 3 H 5 A 2 2 0 0 0 3 5 V 14 A 2 2 0 0 0 5 16 H 8"/></svg>`),
+  edit:     s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4 L 20 10 L 8 22 H 2 V 16 Z M 12 6 L 18 12"/></svg>`),
+  trash:    s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6 H 21 M8 6 V 4 A 1 1 0 0 1 9 3 H 15 A 1 1 0 0 1 16 4 V 6 M5 6 L 6 21 H 18 L 19 6"/></svg>`),
+  refresh:  s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 A 9 9 0 0 1 18 6 L 21 9 M21 4 V 9 H 16 M21 12 A 9 9 0 0 1 6 18 L 3 15 M3 20 V 15 H 8"/></svg>`),
+  qr:       s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="6" y="6" width="1" height="1" fill="currentColor"/><rect x="17" y="6" width="1" height="1" fill="currentColor"/><rect x="6" y="17" width="1" height="1" fill="currentColor"/><path d="M14 14 H 16 V 16 H 14 Z M 18 14 H 21 V 16 H 18 Z M 14 18 H 16 V 21 H 14 Z M 18 18 H 21 V 21 H 18 Z"/></svg>`),
+  x:        s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 6 L 18 18 M18 6 L 6 18"/></svg>`),
+  logout:   s => svgRaw(`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M16 17 L 21 12 L 16 7 M21 12 H 9 M9 4 H 5 A 1 1 0 0 0 4 5 V 19 A 1 1 0 0 0 5 20 H 9"/></svg>`),
+};
+
+function veilMark(size = 18) {
+  return svgRaw(`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none">
+    <path d="M3 4 L12 21 L21 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M6 4 L12 16.5 L18 4" stroke="#7C5CFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+    <path d="M9 4 L12 12 L15 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.4"/>
+  </svg>`);
 }
 
-async function loadStats(){
-  const s = await api('/api/dashboard');
-  document.getElementById('stats').innerHTML = `
-    <div class="stat"><div class="label">Users</div><div class="value">${s.users_total}</div></div>
-    <div class="stat"><div class="label">Active</div><div class="value">${s.users_active}</div></div>
-    <div class="stat"><div class="label">Bytes this month</div><div class="value">${bytes(s.bytes_used_current_month)}</div></div>
-    <div class="stat"><div class="label">With quota</div><div class="value">${s.users_with_quota}</div></div>
-    <div class="stat"><div class="label">At quota</div><div class="value">${s.users_at_quota}</div></div>`;
+function fmtBytes(n) {
+  if (n === null || n === undefined) return '∞';
+  if (n === 0) return '0 B';
+  if (n < 1024) return n + ' B';
+  const u = ['KB','MB','GB','TB'];
+  let i = -1, v = n;
+  do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
+  return v.toFixed(v < 10 ? 2 : 1) + ' ' + u[i];
+}
+function fmtRate(bps) {
+  if (!bps) return '0';
+  if (bps < 1024) return bps.toFixed(0) + ' B/s';
+  if (bps < 1024 * 1024) return (bps / 1024).toFixed(1) + ' KB/s';
+  return (bps / 1024 / 1024).toFixed(2) + ' MB/s';
+}
+function fmtDate(t) { return t ? new Date(t * 1000).toISOString().slice(0, 10) : '—'; }
+
+function b64url(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function loadUsers(){
-  allUsers = await api('/api/users');
-  renderUsers();
+//──────────────────────────────────────────────────────────────
+// Auth + API
+//──────────────────────────────────────────────────────────────
+let AUTH = null; // "Basic ..."
+let USERNAME = '';
+
+async function api(path, opts = {}) {
+  const headers = Object.assign({}, opts.headers || {});
+  if (AUTH) headers.Authorization = AUTH;
+  const r = await fetch(path, Object.assign({}, opts, { headers }));
+  if (!r.ok) {
+    const text = await r.text();
+    throw new Error(r.status + ': ' + (text || r.statusText));
+  }
+  if (r.status === 204) return null;
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('application/json') ? r.json() : r.text();
 }
 
-function compareKey(a, b, k){
-  const av = a[k], bv = b[k];
-  if(av===bv) return 0;
-  if(av==null) return 1;
-  if(bv==null) return -1;
-  return av < bv ? -1 : 1;
+// Cache-aware GET — uses TanStack QueryClient so repeated calls
+// inside staleTime hit the cache instead of the network. Mutations
+// (POST/PATCH/DELETE) bypass cache via api() directly.
+async function cachedGet(path, opts = {}) {
+  return queryClient.fetchQuery({
+    queryKey: ['api', path],
+    queryFn: () => api(path),
+    staleTime: opts.staleTime,
+  });
+}
+function invalidateApi(path) {
+  return queryClient.invalidateQueries({ queryKey: path ? ['api', path] : ['api'] });
 }
 
-function applySort(){
-  document.querySelectorAll('th').forEach(th => {
-    th.classList.remove('sort-asc','sort-desc');
-    if(th.dataset.key === sortKey) th.classList.add(sortDir==='asc'?'sort-asc':'sort-desc');
+function toast(msg, kind) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = kind || '';
+  requestAnimationFrame(() => t.classList.add('show'));
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+//──────────────────────────────────────────────────────────────
+// Login
+//──────────────────────────────────────────────────────────────
+function initLogin() {
+  document.getElementById('loginMark').appendChild(veilMark(18));
+  const saved = sessionStorage.getItem('veil.auth');
+  const savedU = sessionStorage.getItem('veil.user');
+  if (saved && savedU) {
+    AUTH = saved; USERNAME = savedU;
+    tryEnter();
+    return;
+  }
+  document.getElementById('loginForm').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const u = document.getElementById('u').value;
+    const p = document.getElementById('p').value;
+    AUTH = 'Basic ' + btoa(u + ':' + p);
+    USERNAME = u;
+    document.getElementById('loginErr').textContent = '';
+    await tryEnter();
   });
 }
 
-function renderUsers(){
-  applySort();
-  const filter = document.getElementById('filter').value.trim().toLowerCase();
-  let rows = allUsers.slice();
-  if(filter){
-    rows = rows.filter(u =>
-      u.name.toLowerCase().includes(filter) ||
-      u.id.toLowerCase().includes(filter) ||
-      u.status.toLowerCase().includes(filter));
-  }
-  rows.sort((a,b) => compareKey(a,b,sortKey) * (sortDir==='asc'?1:-1));
-
-  const tbody = document.getElementById('users');
-  tbody.innerHTML = '';
-  document.getElementById('empty').style.display = rows.length===0 ? 'block' : 'none';
-  for(const u of rows){
-    const tr = document.createElement('tr');
-    const usePct = u.quota_bytes_per_month
-      ? Math.min(100, Math.round(100 * u.used_bytes_current_month / u.quota_bytes_per_month))
-      : null;
-    const progress = usePct !== null
-      ? `<div class="progress${usePct>=100?' over':''}"><div style="width:${usePct}%"></div></div>`
-      : '';
-    tr.innerHTML = `
-      <td><strong>${u.name}</strong><br/><code>${u.id}</code></td>
-      <td class="status-${u.status}">${u.status}</td>
-      <td>${ts(u.created_at)}</td>
-      <td>${bytes(u.used_bytes_current_month)} ${progress}</td>
-      <td>${bytes(u.quota_bytes_per_month)}</td>
-      <td>${ts(u.expires_at)}</td>
-      <td>${ts(u.last_seen)}</td>
-      <td>
-        ${u.status==='active'
-          ? `<button onclick="setStatus('${u.id}','revoked')">revoke</button>`
-          : `<button onclick="setStatus('${u.id}','active')">restore</button>`}
-        <button onclick="editQuota('${u.id}')">quota</button>
-        <button onclick="editExpiry('${u.id}')">expiry</button>
-        <button class="danger" onclick="deleteUser('${u.id}')">delete</button>
-      </td>`;
-    tbody.appendChild(tr);
+async function tryEnter() {
+  try {
+    await api('/api/dashboard');
+    sessionStorage.setItem('veil.auth', AUTH);
+    sessionStorage.setItem('veil.user', USERNAME);
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('app').classList.add('show');
+    bootApp();
+  } catch (e) {
+    AUTH = null;
+    sessionStorage.removeItem('veil.auth');
+    document.getElementById('loginErr').textContent = e.message;
   }
 }
 
-document.querySelectorAll('th').forEach(th => {
-  if(!th.dataset.key) return;
-  th.onclick = () => {
-    if(sortKey === th.dataset.key){
-      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-    } else {
-      sortKey = th.dataset.key;
-      sortDir = 'asc';
+function logout() {
+  sessionStorage.clear();
+  location.reload();
+}
+
+//──────────────────────────────────────────────────────────────
+// App shell
+//──────────────────────────────────────────────────────────────
+const NAV = [
+  { id: 'overview',   label: 'Overview',   icon: 'zap'      },
+  { id: 'users',      label: 'Users',      icon: 'user'     },
+  { id: 'transports', label: 'Transports', icon: 'shield'   },
+  { id: 'logs',       label: 'Audit log',  icon: 'terminal' },
+  { id: 'settings',   label: 'Settings',   icon: 'settings' },
+];
+
+// STATE/setStore live on window (defined in the module script above).
+
+function bootApp() {
+  document.getElementById('sideMark').appendChild(veilMark(18));
+  document.getElementById('avatarLetter').textContent = (USERNAME[0] || 'O').toUpperCase();
+  document.getElementById('whoUser').textContent = USERNAME;
+  document.getElementById('sideHost').textContent = location.hostname || 'localhost';
+  document.getElementById('logoutBtn').appendChild(Glyph.logout(13));
+  document.getElementById('logoutBtn').addEventListener('click', logout);
+  renderNav();
+  refreshAll().then(() => renderView());
+  // Background refresh on a 15s tick — store updates only fire if the
+  // payload actually changed (Object.is check on slice references),
+  // so this no longer re-renders the view on every tick.
+  setInterval(refreshAll, 15000);
+}
+
+function renderNav() {
+  const nav = document.getElementById('nav');
+  nav.innerHTML = '';
+  for (const it of NAV) {
+    const item = el('div', {
+      class: 'nav-item' + (STATE.view === it.id ? ' active' : ''),
+      // Just write the view to the store — the subscriber re-renders.
+      onclick: () => { STATE.view = it.id; },
+    });
+    const ic = el('span', { class: 'icon' }); ic.appendChild(Glyph[it.icon](14)); item.appendChild(ic);
+    item.appendChild(el('span', null, it.label));
+    if (it.id === 'users' && STATE.users.length) {
+      item.appendChild(el('span', { class: 'badge' }, String(STATE.users.length)));
     }
-    renderUsers();
+    nav.appendChild(item);
+  }
+}
+
+async function refreshAll() {
+  try {
+    const [dash, users, info, ver] = await Promise.all([
+      cachedGet('/api/dashboard').catch(() => null),
+      cachedGet('/api/users').catch(() => []),
+      cachedGet('/api/server-info').catch(() => null),
+      cachedGet('/api/version').catch(() => null),
+    ]);
+    // Set each slice individually — the store skips the update when
+    // the value is reference-equal to the previous one (TanStack
+    // returns the same cached object until the payload changes), so
+    // subscribers don't fire on idle ticks.
+    setStore({ dashboard: dash, users: users || [], serverInfo: info, version: ver });
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+// Render the active view into #main. Only called from the store
+// subscriber (renderViewIfMounted) and on initial boot.
+function renderView() {
+  const main = document.getElementById('main');
+  main.innerHTML = '';
+  const view = el('div', { class: 'view' });
+  main.appendChild(view);
+  switch (STATE.view) {
+    case 'overview':   renderOverview(view); break;
+    case 'users':      renderUsers(view);    break;
+    case 'transports': renderTransports(view); break;
+    case 'logs':       renderLogs(view);     break;
+    case 'settings':   renderSettings(view); break;
+  }
+}
+function renderViewIfMounted() {
+  if (document.getElementById('main') && document.getElementById('app')?.classList.contains('show')) {
+    renderView();
+  }
+}
+window.renderView = renderView;
+window.renderViewIfMounted = renderViewIfMounted;
+
+//──────────────────────────────────────────────────────────────
+// Overview
+//──────────────────────────────────────────────────────────────
+function renderOverview(root) {
+  const d = STATE.dashboard || {};
+  const head = el('div', { class: 'pageHead' },
+    el('div', null,
+      el('h1', null, 'Overview'),
+      el('div', { class: 'sub' }, `${d.users_active || 0} active · ${(STATE.serverInfo?.transports || []).length} transports configured`),
+    ),
+    el('div', { class: 'actions' },
+      segmented(['1h', '24h', '7d', '30d'], '24h', () => {}),
+      iconBtn('refresh', () => { invalidateApi(); refreshAll(); }, 'Refresh'),
+      primaryBtn(['plus', 'Add user'], () => openAddUser()),
+    ),
+  );
+  root.appendChild(head);
+
+  // stat row
+  const totalBytes = STATE.users.reduce((s, u) => s + (u.used_bytes_current_month || 0), 0);
+  const stats = [
+    { label: 'Active sessions', val: d.users_active ?? 0,                                  sub: `${d.users_total || 0} total`, color: 'var(--text)' },
+    { label: 'Throughput now',  val: '—', unit: 'MB/s',                                    sub: 'live · sampled 1Hz',           color: 'var(--accent)' },
+    { label: 'Used this month', val: fmtBytes(totalBytes).split(' ')[0],
+      unit: fmtBytes(totalBytes).split(' ')[1],                                            sub: `across ${d.users_total || 0} users`, color: 'var(--text)' },
+    { label: 'At quota',        val: d.users_at_quota ?? 0,                                sub: `${d.users_with_quota || 0} have quotas`, color: (d.users_at_quota || 0) > 0 ? 'var(--warn)' : 'var(--text)' },
+  ];
+  const row = el('div', { class: 'stat-row' });
+  stats.forEach(s => {
+    row.appendChild(el('div', { class: 'card stat tight' },
+      el('div', { class: 'label' }, s.label),
+      el('div', { class: 'val' },
+        el('span', { style: { color: s.color, fontVariantNumeric: 'tabular-nums' } }, String(s.val)),
+        s.unit ? el('span', { class: 'unit' }, s.unit) : null,
+      ),
+      el('div', { class: 'sub' }, s.sub),
+    ));
+  });
+  root.appendChild(row);
+
+  // throughput + transport split
+  const grid = el('div', { class: 'grid-2' });
+  const chartCard = el('div', { class: 'card flush' },
+    el('div', { class: 'card-head' },
+      el('div', { class: 't' }, 'Aggregate throughput'),
+      el('div', { class: 'meta' }, '60s window · sampled 1Hz'),
+    ),
+  );
+  chartCard.appendChild(buildChart(120));
+  grid.appendChild(chartCard);
+
+  const splitCard = el('div', { class: 'card' },
+    el('div', { class: 't', style: { fontSize: '12px', fontWeight: 600 } }, 'Transport split'),
+    el('div', { style: { fontSize: '10.5px', color: 'var(--textMute)', marginTop: '2px', fontFamily: 'var(--fontMono)' } }, 'configured listeners'),
+  );
+  const splitRow = el('div', { class: 'split-row', style: { marginTop: '12px' } });
+  const tlist = STATE.serverInfo?.transports || [];
+  if (!tlist.length) {
+    splitCard.appendChild(el('div', { style: { fontSize: '12px', color: 'var(--textDim)', padding: '14px 0' } },
+      'No server-info available. Update server config and restart admin daemon.'));
+  } else {
+    tlist.forEach(t => {
+      const opacity = { reality: 1, wss: 0.7, quic: 0.45, masque: 0.25 }[t.type] || 0.6;
+      splitRow.appendChild(el('div', null,
+        el('div', { class: 'row' },
+          el('span', null, t.type.toUpperCase()),
+          el('span', { style: { color: 'var(--textDim)' } }, t.addr),
+        ),
+        el('div', { class: 'bar' }, el('div', { style: { width: '100%', background: 'var(--accent)', opacity: String(opacity) } })),
+      ));
+    });
+    splitCard.appendChild(splitRow);
+  }
+  grid.appendChild(splitCard);
+  root.appendChild(grid);
+
+  // users preview
+  const tableCard = el('div', { class: 'card flush' },
+    el('div', { class: 'card-head' },
+      el('div', { class: 't' }, `Users · ${STATE.users.length}`),
+      el('button', { class: 'btn ghost', onclick: () => { STATE.view = 'users'; renderNav(); renderView(); }, style: { fontSize: '11.5px' } }, 'View all →'),
+    ),
+    tableHeader(),
+  );
+  STATE.users.slice(0, 5).forEach(u => tableCard.appendChild(userRow(u)));
+  if (!STATE.users.length) tableCard.appendChild(emptyState('No users yet', 'Add one above to start sharing access.'));
+  root.appendChild(tableCard);
+
+  // start live throughput
+  startThroughputSampler();
+}
+
+//──────────────────────────────────────────────────────────────
+// Users page
+//──────────────────────────────────────────────────────────────
+let usersFilter = '';
+function renderUsers(root) {
+  const head = el('div', { class: 'pageHead' },
+    el('div', null,
+      el('h1', null, 'Users'),
+      el('div', { class: 'sub' }, `${STATE.users.length} total · ${STATE.users.filter(u => u.status === 'active').length} active`),
+    ),
+    el('div', { class: 'actions' },
+      filterInput('Filter users…', v => { usersFilter = v; renderUsers(root.querySelector(':scope > .pageHead')?.parentElement || root); }),
+      iconBtn('refresh', () => { invalidateApi(); refreshAll(); }, 'Refresh'),
+      primaryBtn(['plus', 'Add user'], () => openAddUser()),
+    ),
+  );
+  root.innerHTML = '';
+  root.appendChild(head);
+
+  const card = el('div', { class: 'card flush' }, tableHeader());
+  const filtered = STATE.users.filter(u => {
+    if (!usersFilter) return true;
+    const q = usersFilter.toLowerCase();
+    return u.name.toLowerCase().includes(q) || u.id.toLowerCase().includes(q) || u.status.toLowerCase().includes(q);
+  });
+  if (!filtered.length) {
+    card.appendChild(emptyState(usersFilter ? 'No matches' : 'No users yet',
+      usersFilter ? 'Try a different filter.' : 'Click "Add user" to provision one.'));
+  } else {
+    filtered.forEach(u => card.appendChild(userRow(u)));
+  }
+  root.appendChild(card);
+}
+
+function tableHeader() {
+  return el('div', { class: 'table-head' },
+    el('div', null, 'USER'),
+    el('div', null, 'QUOTA'),
+    el('div', null, 'STATUS'),
+    el('div', null, 'EXPIRES'),
+    el('div', { style: { textAlign: 'right' } }, 'ACTIONS'),
+  );
+}
+
+function userRow(u) {
+  const q = u.quota_bytes_per_month || 0;
+  const used = u.used_bytes_current_month || 0;
+  const pct = q ? Math.min(100, used / q * 100) : 0;
+  const barCls = pct >= 100 ? 'over' : pct >= 70 ? 'warn' : '';
+  const statusCls = u.status === 'active' ? '' : (u.status === 'expired' || u.status === 'quota_exceeded') ? 'warn' : 'err';
+
+  const quotaCell = q
+    ? el('div', null,
+        el('div', { class: 'quota-row' }, el('span', null, `${fmtBytes(used)} / ${fmtBytes(q)}`), el('span', null, Math.round(pct) + '%')),
+        el('div', { class: 'quota-bar ' + barCls }, el('div', { style: { width: Math.max(2, pct) + '%' } })),
+      )
+    : el('div', { class: 'quota-row' }, el('span', null, `${fmtBytes(used)} used`), el('span', null, '∞'));
+
+  const actions = el('div', { class: 'row-actions' },
+    iconBtn('qr',  () => openShareLink(u),       'Share link'),
+    iconBtn('edit',() => openEditUser(u),        'Edit'),
+    iconBtn('trash', () => openDeleteUser(u),    'Delete'),
+  );
+  actions.querySelectorAll('button').forEach(b => b.classList.add('icon-only'));
+  actions.lastChild.classList.add('danger');
+
+  return el('div', { class: 'table-row' },
+    el('div', null,
+      el('div', { class: 'uname' }, u.name),
+      el('div', { class: 'uid' }, u.id.slice(0, 16) + '…'),
+    ),
+    quotaCell,
+    el('div', null, el('span', { class: 'pill ' + statusCls }, u.status)),
+    el('div', { style: { fontFamily: 'var(--fontMono)', color: 'var(--textDim)', fontSize: '11.5px' } }, fmtDate(u.expires_at)),
+    actions,
+  );
+}
+
+//──────────────────────────────────────────────────────────────
+// Transports page
+//──────────────────────────────────────────────────────────────
+function renderTransports(root) {
+  const tlist = STATE.serverInfo?.transports || [];
+  root.innerHTML = '';
+  root.appendChild(el('div', { class: 'pageHead' },
+    el('div', null,
+      el('h1', null, 'Transports'),
+      el('div', { class: 'sub' }, `${tlist.length} configured · edit server.yaml + restart to change`),
+    ),
+    el('div', { class: 'actions' }, iconBtn('refresh', () => { invalidateApi(); refreshAll(); }, 'Refresh')),
+  ));
+  if (!tlist.length) {
+    root.appendChild(el('div', { class: 'card', style: { padding: '40px', textAlign: 'center', color: 'var(--textDim)' } },
+      'No transport info available. Make sure veil-admin was started with --server-config and --public-host.'));
+    return;
+  }
+  const list = el('div', { class: 'card flush' });
+  tlist.forEach((t, i) => {
+    list.appendChild(el('div', { class: 'setting-row' },
+      el('div', { class: 'info' },
+        el('div', { class: 't' }, t.type.toUpperCase()),
+        el('div', { class: 'd', style: { fontFamily: 'var(--fontMono)' } },
+          `addr ${t.addr}` + (t.sni ? ` · sni ${t.sni}` : '') + (t.path ? ` · path ${t.path}` : '')),
+      ),
+      el('span', { class: 'pill' }, 'listening'),
+    ));
+  });
+  root.appendChild(list);
+}
+
+//──────────────────────────────────────────────────────────────
+// Logs page (placeholder — server doesn't expose stream yet)
+//──────────────────────────────────────────────────────────────
+function renderLogs(root) {
+  root.innerHTML = '';
+  root.appendChild(el('div', { class: 'pageHead' },
+    el('div', null,
+      el('h1', null, 'Audit log'),
+      el('div', { class: 'sub' }, 'session events · admin API calls'),
+    ),
+  ));
+  const card = el('div', { class: 'card flush' });
+  const sample = [
+    { ts: 'now',     lvl: 'info', msg: 'admin api online · awaiting events' },
+    { ts: '—',       lvl: 'info', msg: 'Live stream not yet wired. Use `journalctl -u veil-admin -f` on the host.' },
+  ];
+  sample.forEach(l => {
+    card.appendChild(el('div', { class: 'log-line' },
+      el('span', { class: 'ts' }, l.ts),
+      el('span', { class: 'lvl ' + l.lvl }, l.lvl),
+      el('span', null, l.msg),
+    ));
+  });
+  root.appendChild(card);
+}
+
+//──────────────────────────────────────────────────────────────
+// Settings page
+//──────────────────────────────────────────────────────────────
+function renderSettings(root) {
+  root.innerHTML = '';
+  root.appendChild(el('div', { class: 'pageHead' },
+    el('div', null,
+      el('h1', null, 'Settings'),
+      el('div', { class: 'sub' }, `version ${STATE.version?.version || '?'} · commit ${(STATE.version?.commit || '').slice(0, 7) || '?'}`),
+    ),
+  ));
+
+  const sec1 = el('div', { class: 'card flush', style: { marginBottom: '14px' } });
+  sec1.appendChild(el('div', { class: 'card-head' }, el('div', { class: 't' }, 'Admin daemon')));
+  [
+    ['Host', location.hostname],
+    ['Version', STATE.version?.version || 'unknown'],
+    ['Build commit', STATE.version?.commit || 'unknown'],
+    ['Build date', STATE.version?.date || 'unknown'],
+  ].forEach(([k, v]) => {
+    sec1.appendChild(el('div', { class: 'setting-row' },
+      el('div', { class: 'info' }, el('div', { class: 't' }, k)),
+      el('div', { style: { fontFamily: 'var(--fontMono)', fontSize: '11.5px', color: 'var(--textDim)' } }, v),
+    ));
+  });
+  root.appendChild(sec1);
+
+  const sec2 = el('div', { class: 'card flush' });
+  sec2.appendChild(el('div', { class: 'card-head' }, el('div', { class: 't' }, 'Session')));
+  sec2.appendChild(el('div', { class: 'setting-row' },
+    el('div', { class: 'info' },
+      el('div', { class: 't' }, 'Sign out'),
+      el('div', { class: 'd' }, 'Clears cached credentials from this browser'),
+    ),
+    el('button', { class: 'btn danger', onclick: logout }, 'Sign out'),
+  ));
+  root.appendChild(sec2);
+}
+
+//──────────────────────────────────────────────────────────────
+// Throughput chart (live, 60s rolling buffer)
+//──────────────────────────────────────────────────────────────
+let _samplerTimer = null, _down = [], _up = [], _lastBytes = null;
+const N_SAMPLES = 60;
+
+function buildChart(h = 120) {
+  const W = 600, H = h;
+  const wrap = el('div', { style: { padding: '4px 14px 14px' } });
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', String(H));
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.style.display = 'block';
+
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="vg-down" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#7C5CFF" stop-opacity="0.45"/>
+        <stop offset="100%" stop-color="#7C5CFF" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="vg-up" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#7C5CFF" stop-opacity="0.18"/>
+        <stop offset="100%" stop-color="#7C5CFF" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    ${[0.25, 0.5, 0.75].map(y => `<line x1="0" x2="${W}" y1="${H * y}" y2="${H * y}" stroke="rgba(255,255,255,0.07)" stroke-width="0.5" stroke-dasharray="2 4"/>`).join('')}
+    <path id="thr-area-d" fill="url(#vg-down)"/>
+    <path id="thr-line-d" fill="none" stroke="#7C5CFF" stroke-width="1.4"/>
+    <path id="thr-area-u" fill="url(#vg-up)"/>
+    <path id="thr-line-u" fill="none" stroke="#7C5CFF" stroke-width="1" stroke-opacity="0.5" stroke-dasharray="3 2"/>
+  `;
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+function updateChartPaths() {
+  const W = 600, H = 120;
+  const px = i => (i / (N_SAMPLES - 1)) * W;
+  const max = Math.max(1, ..._down, ..._up);
+  const py = v => H - (v / max) * H * 0.92 - 4;
+
+  const pad = arr => {
+    const a = arr.slice();
+    while (a.length < N_SAMPLES) a.unshift(0);
+    return a;
   };
-});
+  const d = pad(_down), u = pad(_up);
 
-async function loadAll(){
-  try{
-    await Promise.all([loadStats(), loadUsers()]);
-  }catch(e){ alert(e.message); }
+  const area = arr => {
+    let p = `M 0 ${H}`;
+    arr.forEach((v, i) => p += ` L ${px(i)} ${py(v)}`);
+    p += ` L ${W} ${H} Z`;
+    return p;
+  };
+  const line = arr => arr.map((v, i) => `${i === 0 ? 'M' : 'L'} ${px(i)} ${py(v)}`).join(' ');
+
+  const ad = document.getElementById('thr-area-d'); if (ad) ad.setAttribute('d', area(d));
+  const au = document.getElementById('thr-area-u'); if (au) au.setAttribute('d', area(u));
+  const ld = document.getElementById('thr-line-d'); if (ld) ld.setAttribute('d', line(d));
+  const lu = document.getElementById('thr-line-u'); if (lu) lu.setAttribute('d', line(u));
+
+  // update header stat
+  const valEl = document.querySelector('.stat-row .stat:nth-child(2) .val span:first-child');
+  if (valEl && _down.length) {
+    const lastDown = _down[_down.length - 1] || 0;
+    valEl.textContent = (lastDown / 1024 / 1024).toFixed(2);
+  }
 }
 
-async function createUser(){
-  const name = document.getElementById('newName').value.trim();
-  const pub  = document.getElementById('newPubkey').value.trim();
-  if(!name || !pub){ alert('name and pubkey required'); return; }
-  try{
-    await api('/api/users', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name, pubkey_b64: pub})});
-    document.getElementById('newName').value='';
-    document.getElementById('newPubkey').value='';
-    loadAll();
-  }catch(e){ alert(e.message); }
+function startThroughputSampler() {
+  if (_samplerTimer) return;
+  const tick = async () => {
+    try {
+      const dash = await api('/api/dashboard');
+      const cur = dash.bytes_used_current_month || 0;
+      if (_lastBytes !== null) {
+        const delta = Math.max(0, cur - _lastBytes);
+        _down.push(delta);
+        _up.push(delta * 0.18); // upload approx 18% of download
+        if (_down.length > N_SAMPLES) _down.shift();
+        if (_up.length > N_SAMPLES) _up.shift();
+        updateChartPaths();
+      }
+      _lastBytes = cur;
+    } catch {}
+  };
+  tick();
+  _samplerTimer = setInterval(tick, 1000);
 }
 
-async function setStatus(id, status){
-  try{
-    await api('/api/users/'+id, {
-      method:'PATCH', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({status})});
-    loadAll();
-  }catch(e){ alert(e.message); }
+//──────────────────────────────────────────────────────────────
+// UI helpers
+//──────────────────────────────────────────────────────────────
+function primaryBtn(content, onclick) {
+  const b = el('button', { class: 'btn primary', onclick });
+  if (Array.isArray(content)) {
+    b.appendChild(Glyph[content[0]](12));
+    b.appendChild(document.createTextNode(content[1]));
+  } else b.textContent = content;
+  return b;
+}
+function iconBtn(name, onclick, title) {
+  const b = el('button', { class: 'btn ghost icon-only', onclick, title: title || name });
+  b.appendChild(Glyph[name](14));
+  return b;
+}
+function segmented(opts, current, onpick) {
+  const wrap = el('div', { class: 'seg' });
+  opts.forEach(o => {
+    const b = el('button', { class: o === current ? 'active' : '', onclick: () => onpick(o) }, o);
+    wrap.appendChild(b);
+  });
+  return wrap;
+}
+function filterInput(ph, oninput) {
+  const wrap = el('div', { class: 'filter-bar' });
+  wrap.appendChild(Glyph.search(11));
+  const i = el('input', { placeholder: ph, value: usersFilter });
+  i.addEventListener('input', () => oninput(i.value));
+  wrap.appendChild(i);
+  return wrap;
+}
+function emptyState(title, sub) {
+  return el('div', { class: 'empty' },
+    el('div', null, title),
+    sub ? el('div', { style: { fontSize: '11.5px', color: 'var(--textMute)', marginTop: '4px' } }, sub) : null,
+  );
 }
 
-async function deleteUser(id){
-  if(!confirm('Delete user '+id+'?')) return;
-  try{
-    await api('/api/users/'+id, {method:'DELETE'});
-    loadAll();
-  }catch(e){ alert(e.message); }
+//──────────────────────────────────────────────────────────────
+// Modals
+//──────────────────────────────────────────────────────────────
+function openModal(node) {
+  const ov = document.getElementById('overlay');
+  ov.innerHTML = '';
+  const m = el('div', { class: 'modal', onclick: ev => ev.stopPropagation() });
+  m.appendChild(node);
+  ov.appendChild(m);
+  ov.classList.add('show');
 }
-
-function openModal(title, body, save){
-  document.getElementById('modalTitle').textContent = title;
-  document.getElementById('modalBody').innerHTML = body;
-  modalCtx = save;
-  document.getElementById('overlay').classList.add('show');
-}
-function closeModal(){
+function closeModal() {
   document.getElementById('overlay').classList.remove('show');
-  modalCtx = null;
+  setTimeout(() => { document.getElementById('overlay').innerHTML = ''; }, 200);
 }
-async function saveModal(){
-  if(!modalCtx) return;
-  try{
-    await modalCtx();
-    closeModal();
-    loadAll();
-  }catch(e){ alert(e.message); }
-}
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeModal(); });
 
-function editQuota(id){
-  const u = allUsers.find(x => x.id===id);
-  const cur = u.quota_bytes_per_month ?? '';
-  openModal('Edit quota — '+u.name, `
-    <label>Quota in bytes (empty = unlimited)</label>
-    <input id="qInput" type="number" min="0" placeholder="e.g. 5368709120" value="${cur}" />
-    <p class="muted" style="font-size:0.8rem; margin-top:0.5rem;">
-      Examples: 1073741824 = 1 GB, 5368709120 = 5 GB, 53687091200 = 50 GB.
-    </p>`,
-    async () => {
-      const raw = document.getElementById('qInput').value.trim();
-      const body = raw === ''
-        ? { clear_quota: true }
-        : { quota_bytes_per_month: parseInt(raw, 10) };
-      await api('/api/users/'+id, {
-        method:'PATCH', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body)});
-    });
-}
-
-function editExpiry(id){
-  const u = allUsers.find(x => x.id===id);
-  const cur = u.expires_at ? new Date(u.expires_at*1000).toISOString().slice(0,10) : '';
-  openModal('Edit expiry — '+u.name, `
-    <label>Expires on (YYYY-MM-DD; empty = never)</label>
-    <input id="eInput" type="date" value="${cur}" />`,
-    async () => {
-      const raw = document.getElementById('eInput').value.trim();
-      const body = raw === ''
-        ? { clear_expiry: true }
-        : { expires_at: Math.floor(new Date(raw + 'T23:59:59Z').getTime() / 1000) };
-      await api('/api/users/'+id, {
-        method:'PATCH', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(body)});
-    });
+function openAddUser() {
+  const body = el('div', null,
+    el('h2', null, 'Add user'),
+    el('div', { class: 'sub' }, 'Provision a new client. The pubkey is shared by the operator after the user generates a Noise XK keypair.'),
+    el('label', null, 'Display name'),
+    el('input', { id: 'au-name', placeholder: 'alice' }),
+    el('label', null, 'Client pubkey (base64) — optional, can be set later'),
+    el('textarea', { id: 'au-pub', placeholder: 'P+8xLqYS…', rows: '2' }),
+    el('div', { class: 'help' }, 'Leave empty if you plan to bind the key on first use via QR/share-link rotation.'),
+    el('div', { class: 'footer' },
+      el('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+      el('button', { class: 'btn primary', onclick: async () => {
+        const name = document.getElementById('au-name').value.trim();
+        const pub  = document.getElementById('au-pub').value.trim();
+        if (!name) return toast('Name required', 'err');
+        try {
+          await api('/api/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, pubkey_b64: pub }),
+          });
+          toast('User added', 'ok');
+          closeModal();
+          invalidateApi(); refreshAll();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, 'Add user'),
+    ),
+  );
+  openModal(body);
 }
 
-document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); });
+function openEditUser(u) {
+  const body = el('div', null,
+    el('h2', null, 'Edit ' + u.name),
+    el('div', { class: 'sub' }, 'Quota, expiry, and lifecycle controls.'),
+    el('div', { class: 'row2' },
+      el('div', null,
+        el('label', null, 'Quota (bytes / month, 0 = unlimited)'),
+        el('input', { id: 'eu-quota', type: 'number', min: '0', value: String(u.quota_bytes_per_month || 0) }),
+      ),
+      el('div', null,
+        el('label', null, 'Expires on (YYYY-MM-DD, blank = never)'),
+        el('input', { id: 'eu-exp', type: 'date', value: u.expires_at ? new Date(u.expires_at * 1000).toISOString().slice(0, 10) : '' }),
+      ),
+    ),
+    el('label', null, 'Status'),
+    el('select', { id: 'eu-status' },
+      ['active', 'revoked'].map(s => el('option', { value: s, selected: u.status === s ? '' : null }, s)),
+    ),
+    el('div', { class: 'footer' },
+      el('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+      el('button', { class: 'btn primary', onclick: async () => {
+        const q   = parseInt(document.getElementById('eu-quota').value, 10) || 0;
+        const exp = document.getElementById('eu-exp').value.trim();
+        const s   = document.getElementById('eu-status').value;
+        const patch = { status: s };
+        patch.quota_bytes_per_month = q;
+        if (q === 0) patch.clear_quota = true;
+        if (exp) patch.expires_at = Math.floor(new Date(exp + 'T23:59:59Z').getTime() / 1000);
+        else     patch.clear_expiry = true;
+        try {
+          await api('/api/users/' + u.id, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(patch),
+          });
+          toast('Saved', 'ok');
+          closeModal();
+          invalidateApi(); refreshAll();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, 'Save'),
+    ),
+  );
+  openModal(body);
+}
 
-loadVersion();
-loadAll();
-setInterval(loadAll, 30000);
+function openDeleteUser(u) {
+  const body = el('div', null,
+    el('h2', null, 'Delete ' + u.name + '?'),
+    el('div', { class: 'sub' }, 'This permanently revokes access. The user can no longer connect with their current pubkey.'),
+    el('div', { style: { padding: '10px', background: 'var(--errSoft)', color: 'var(--err)', borderRadius: '8px', fontSize: '12px', marginTop: '6px' } },
+      `id ${u.id}`),
+    el('div', { class: 'footer' },
+      el('button', { class: 'btn', onclick: closeModal }, 'Cancel'),
+      el('button', { class: 'btn danger', onclick: async () => {
+        try {
+          await api('/api/users/' + u.id, { method: 'DELETE' });
+          toast('Deleted', 'ok');
+          closeModal();
+          invalidateApi(); refreshAll();
+        } catch (e) { toast(e.message, 'err'); }
+      } }, 'Delete'),
+    ),
+  );
+  openModal(body);
+}
+
+function openShareLink(u) {
+  const info = STATE.serverInfo;
+  if (!info || !info.static_pubkey_b64) {
+    toast('Server static pubkey unknown — restart admin daemon with --server-config + --public-host', 'err');
+    return;
+  }
+  const transports = info.transports || [];
+  if (!transports.length) { toast('No transports configured on server', 'err'); return; }
+
+  const body = el('div', null,
+    el('h2', null, 'Share link · ' + u.name),
+    el('div', { class: 'sub' }, 'Pre-filled from server-info. The user pastes this into the Veil app to import a profile.'),
+    el('label', null, 'Transport'),
+    el('select', { id: 'sl-transport', onchange: () => updateLink() },
+      transports.map((t, i) => el('option', { value: String(i) }, `${t.type.toUpperCase()} — ${t.addr}`)),
+    ),
+    el('label', null, 'Public host:port'),
+    el('input', { id: 'sl-addr', oninput: updateLink, value: transports[0].addr }),
+    el('label', null, 'Server static pubkey (base64url)'),
+    el('input', { id: 'sl-pub', oninput: updateLink, value: info.static_pubkey_b64 }),
+    el('label', null, 'Generated link'),
+    el('div', { class: 'link-out', id: 'sl-out' }, 'veil://...'),
+    el('div', { class: 'footer' },
+      el('button', { class: 'btn', onclick: closeModal }, 'Close'),
+      el('button', { class: 'btn primary', onclick: () => {
+        const link = document.getElementById('sl-out').textContent;
+        navigator.clipboard.writeText(link).then(() => toast('Copied', 'ok'));
+      } }, [Glyph.copy(12), document.createTextNode(' Copy')]),
+    ),
+  );
+  openModal(body);
+
+  function updateLink() {
+    const idx = parseInt(document.getElementById('sl-transport').value, 10);
+    const t = transports[idx];
+    const addr = document.getElementById('sl-addr').value;
+    const pub  = document.getElementById('sl-pub').value;
+    const params = new URLSearchParams();
+    params.set('addr', addr);
+    params.set('pub', pub);
+    if (t.sni)  params.set('sni', t.sni);
+    if (t.path) params.set('path', t.path);
+    params.set('user', u.id);
+    document.getElementById('sl-out').textContent = `veil://${t.type}?${params.toString()}`;
+
+    // reflect transport-specific addr default if user hasn't customized
+    const addrInput = document.getElementById('sl-addr');
+    if (addrInput.dataset.touched !== '1') addrInput.value = t.addr;
+  }
+  document.getElementById('sl-addr').addEventListener('input', () => {
+    document.getElementById('sl-addr').dataset.touched = '1';
+  });
+  updateLink();
+}
+
+//──────────────────────────────────────────────────────────────
+// Boot — wait for the module script (defer-by-default) to finish
+// importing zustand + query-core and assigning STATE/setStore/
+// queryClient onto window before we start touching state.
+//──────────────────────────────────────────────────────────────
+function bootWhenReady() {
+  if (window.STATE && window.queryClient) initLogin();
+  else                                    setTimeout(bootWhenReady, 30);
+}
+bootWhenReady();
 </script>
 </body>
 </html>

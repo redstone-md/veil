@@ -38,10 +38,16 @@ const (
 const DefaultStreamRecvBuffer = 1 << 20
 
 // streamDataChunk caps how many plaintext bytes one STREAM_DATA frame
-// carries on the wire. Chosen well below frame.MaxPayload to leave
-// headroom for future header/padding growth without exceeding the
-// SecureChannel ciphertext ceiling.
-const streamDataChunk = 8 * 1024
+// carries on the wire. Sized just under frame.MaxPayload (16383)
+// minus header (12) and a 64-byte padding budget so an active
+// shaper can still grow each frame to PadTarget without splitting.
+//
+// Bumped from 8 KiB → 14 KiB to halve the per-byte cost of the
+// secure-channel encrypt + sendMu acquisition + writev syscall on
+// long streams. io.Copy's default 32 KiB read fills two frames
+// instead of four, and TCP-level throughput on the underlying
+// transport scales accordingly.
+const streamDataChunk = 14 * 1024
 
 // Session is a multiplexed, encrypted, full-duplex pipe established
 // between a Veil client and a Veil server.
@@ -154,9 +160,7 @@ func (s *Session) dispatch(f *frame.Frame) error {
 		// No-op until we wire RTT estimation.
 		return nil
 	case frame.TypeWindowUpdate:
-		// Phase 1 ignores explicit windows; the receive-buffer
-		// cap provides the only back-pressure for now.
-		return nil
+		return s.handleWindowUpdate(f)
 	case frame.TypeControl:
 		// Capability / rekey ops land here. Phase 1 ignores them.
 		return nil
@@ -175,7 +179,7 @@ func (s *Session) handleStreamOpen(f *frame.Frame) error {
 	if !s.isPeerInitiatedID(f.StreamID) {
 		return fmt.Errorf("stream open with locally-owned id %d", f.StreamID)
 	}
-	st := s.newStream(f.StreamID, payload.Target)
+	st := s.newStream(f.StreamID, payload.Target, payload.StreamType, payload.InitialWindow)
 	s.streamsMu.Lock()
 	if _, dup := s.streams[f.StreamID]; dup {
 		s.streamsMu.Unlock()
@@ -213,6 +217,20 @@ func (s *Session) handleStreamClose(f *frame.Frame) error {
 	return nil
 }
 
+func (s *Session) handleWindowUpdate(f *frame.Frame) error {
+	p, err := frame.DecodeWindowUpdate(f.Payload)
+	if err != nil {
+		return fmt.Errorf("decode window update: %w", err)
+	}
+	st := s.lookup(f.StreamID)
+	if st == nil {
+		// Stream already torn down — drop silently.
+		return nil
+	}
+	st.addCredit(p.Increment)
+	return nil
+}
+
 func (s *Session) handlePing(f *frame.Frame) error {
 	pong := &frame.Frame{
 		Type:     frame.TypePong,
@@ -226,25 +244,46 @@ func (s *Session) handlePing(f *frame.Frame) error {
 	return s.secure.SendFrame(encoded)
 }
 
-// OpenStream initiates a new stream toward target, transmitting a
-// STREAM_OPEN frame and returning a Stream the caller may use as a
-// duplex byte pipe.
+// OpenStream initiates a new reliable (TCP-like) stream toward target.
+// For UDP relay use OpenStreamWithType with StreamTypeDatagram.
 func (s *Session) OpenStream(ctx context.Context, target frame.Address) (*Stream, error) {
+	return s.OpenStreamWithType(ctx, target, frame.StreamTypeReliable)
+}
+
+// OpenStreamWithType initiates a stream of the given substrate kind.
+// Reliable streams behave as ordered byte pipes (TCP CONNECT). Datagram
+// streams carry len-prefixed UDP datagrams that the remote forward
+// server relays via net.DialUDP.
+func (s *Session) OpenStreamWithType(ctx context.Context, target frame.Address, streamType frame.StreamType) (*Stream, error) {
+	return s.OpenStreamFull(ctx, target, streamType, DefaultStreamRecvBuffer)
+}
+
+// OpenStreamFull is the variant that lets the caller (or test) pick
+// a specific initial flow-control window. Production callers should
+// use OpenStream / OpenStreamWithType which default to
+// DefaultStreamRecvBuffer.
+func (s *Session) OpenStreamFull(ctx context.Context, target frame.Address, streamType frame.StreamType, initialWindow uint32) (*Stream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if streamType == 0 {
+		streamType = frame.StreamTypeReliable
+	}
+	if initialWindow == 0 {
+		initialWindow = DefaultStreamRecvBuffer
 	}
 	id := s.allocateOutboundID()
 
 	open := &frame.StreamOpenPayload{
-		StreamType:    frame.StreamTypeReliable,
-		InitialWindow: DefaultStreamRecvBuffer,
+		StreamType:    streamType,
+		InitialWindow: initialWindow,
 		Target:        target,
 	}
 	openPayload, err := open.Encode()
 	if err != nil {
 		return nil, err
 	}
-	st := s.newStream(id, target)
+	st := s.newStream(id, target, streamType, initialWindow)
 
 	s.streamsMu.Lock()
 	s.streams[id] = st
@@ -338,12 +377,23 @@ func (s *Session) isPeerInitiatedID(id uint32) bool {
 	return false
 }
 
-func (s *Session) newStream(id uint32, target frame.Address) *Stream {
+func (s *Session) newStream(id uint32, target frame.Address, streamType frame.StreamType, initialWindow uint32) *Stream {
+	if streamType == 0 {
+		streamType = frame.StreamTypeReliable
+	}
+	if initialWindow == 0 {
+		initialWindow = DefaultStreamRecvBuffer
+	}
 	st := &Stream{
-		id:     id,
-		sess:   s,
-		target: target,
+		id:         id,
+		sess:       s,
+		target:     target,
+		streamType: streamType,
+		rxRing:     newRingBuf(int(initialWindow)),
+		rxWindow:   initialWindow,
+		txCredit:   int64(initialWindow),
 	}
 	st.rxCond = sync.NewCond(&st.rxMu)
+	st.txCreditCond = sync.NewCond(&st.txMu)
 	return st
 }

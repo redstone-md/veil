@@ -10,3 +10,4 @@ EXPORTS
     veil_mobile_start_with_tun
     veil_ne_start
     veil_ne_ingest_packet
+    veil_desktop_start_with_wintun

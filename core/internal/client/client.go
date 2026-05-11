@@ -149,45 +149,11 @@ func (c *Client) Run(ctx context.Context) error {
 		fb.Add(string(s.Type), s.Addr, d)
 	}
 
-	conn, label, err := fb.Dial(ctx)
-	if err != nil {
-		return c.fail("transport dial", err)
-	}
-	defer conn.Close()
-	c.emit(Event{
-		Type: EventTransportSwitch, Transport: label,
-		Remote: conn.RemoteAddr().String(),
-	})
-	c.logger.Info("transport connected",
-		"transport", label, "remote", conn.RemoteAddr().String())
-
-	established, err := session.HandshakeAsInitiator(conn, *staticKP, serverPub)
-	if err != nil {
-		return c.fail("handshake", err)
-	}
-	c.logger.Info("session established")
-	c.emit(Event{
-		Type: EventConnected, Transport: label,
-		Remote: conn.RemoteAddr().String(),
-	})
-
-	secure := session.NewSecureChannel(conn, established)
-	var shaper session.Shaper
-	if mp := mimicry.Profile(c.cfg.Mimicry); mp != mimicry.ProfileNone {
-		shaper = mimicry.New(mp, 0)
-		c.logger.Info("mimicry shaper active", "profile", mp)
-	}
-	sess := session.New(secure, session.Options{
-		Role:   session.RoleClient,
-		Logger: c.logger,
-		Shaper: shaper,
-	})
-
-	runErr := make(chan error, 1)
-	go func() { runErr <- sess.Run() }()
-
-	socksLogger := c.logger
-	socksProxy := proxy.NewSOCKS5(sess, socksLogger)
+	// Bind the SOCKS5 listener ONCE, outside the reconnect loop, so
+	// applications pointing at it never see a closed port across
+	// session reestablishments. The proxy holds an atomic.Pointer to
+	// the active session — we hot-swap it on each successful reconnect.
+	socksProxy := proxy.NewSOCKS5(nil, c.logger)
 	socksProxy.SetByteCounter(func(tx, rx int64) {
 		if tx > 0 {
 			c.bytesTx.Add(tx)
@@ -203,32 +169,156 @@ func (c *Client) Run(ctx context.Context) error {
 		c.startDecoy(ctx, staticKP.Public)
 	}
 
-	c.logger.Info("ready", "socks5", socksAddr, "transport", label)
-
 	// Periodic traffic event so SDK consumers can poll-free observe
 	// throughput. Cheap; no allocation in the steady state.
 	tickerStop := make(chan struct{})
 	go c.trafficTicker(ctx, tickerStop)
+	defer close(tickerStop)
 
-	defer func() {
-		close(tickerStop)
-		_ = sess.Close()
-		c.emit(Event{Type: EventDisconnected, Transport: label})
-	}()
+	c.logger.Info("ready", "socks5", socksAddr)
 
+	// Reconnect loop. Each iteration: race transports, handshake,
+	// install fresh session in the SOCKS5 proxy, run until session
+	// dies. On death (not ctx cancel), exp backoff + retry.
+	return c.reconnectLoop(ctx, fb, staticKP, serverPub, socksProxy, socksErr)
+}
+
+// reconnectLoop is the heart of session resilience. It dials, runs,
+// and restarts the encrypted session as long as ctx is alive. The
+// SOCKS5 listener stays bound across iterations so user-facing
+// applications never lose their proxy port; only the encrypted
+// transport behind it churns.
+func (c *Client) reconnectLoop(
+	ctx context.Context,
+	fb *transport.FallbackDialer,
+	staticKP *crypto.Keypair,
+	serverPub []byte,
+	socksProxy *proxy.SOCKS5Server,
+	socksErr <-chan error,
+) error {
+	const (
+		minBackoff = 500 * time.Millisecond
+		maxBackoff = 30 * time.Second
+	)
+	backoff := minBackoff
+	attempt := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil
+		}
+		attempt++
+		conn, label, err := fb.Dial(ctx)
+		if err != nil {
+			c.logger.Warn("reconnect: transport dial failed",
+				"err", err, "backoff", backoff, "attempt", attempt)
+			c.emit(Event{Type: EventError, Message: "transport dial: " + err.Error()})
+			if !sleepBackoff(ctx, backoff) {
+				return nil
+			}
+			backoff = nextBackoff(backoff, maxBackoff)
+			continue
+		}
+		c.emit(Event{
+			Type: EventTransportSwitch, Transport: label,
+			Remote: conn.RemoteAddr().String(),
+		})
+		c.logger.Info("transport connected",
+			"transport", label, "remote", conn.RemoteAddr().String(), "attempt", attempt)
+
+		established, err := session.HandshakeAsInitiator(conn, *staticKP, serverPub)
+		if err != nil {
+			c.logger.Warn("reconnect: handshake failed",
+				"err", err, "backoff", backoff)
+			_ = conn.Close()
+			c.emit(Event{Type: EventError, Message: "handshake: " + err.Error()})
+			if !sleepBackoff(ctx, backoff) {
+				return nil
+			}
+			backoff = nextBackoff(backoff, maxBackoff)
+			continue
+		}
+
+		// First successful handshake (or recovery from drop) → reset
+		// backoff, the next failure starts fresh.
+		backoff = minBackoff
+		c.logger.Info("session established")
+		c.emit(Event{
+			Type: EventConnected, Transport: label,
+			Remote: conn.RemoteAddr().String(),
+		})
+
+		secure := session.NewSecureChannel(conn, established)
+		var shaper session.Shaper
+		if mp := mimicry.Profile(c.cfg.Mimicry); mp != mimicry.ProfileNone {
+			shaper = mimicry.New(mp, 0)
+		}
+		sess := session.New(secure, session.Options{
+			Role:   session.RoleClient,
+			Logger: c.logger,
+			Shaper: shaper,
+		})
+		// Hot-swap into the SOCKS5 listener so new accepts use the
+		// fresh session immediately.
+		socksProxy.SetSession(sess)
+
+		runErr := make(chan error, 1)
+		go func() { runErr <- sess.Run() }()
+
+		select {
+		case err := <-runErr:
+			_ = sess.Close()
+			_ = conn.Close()
+			c.emit(Event{Type: EventDisconnected, Transport: label})
+			if err != nil {
+				c.logger.Warn("session died, reconnecting",
+					"err", err, "backoff", backoff)
+				if !sleepBackoff(ctx, backoff) {
+					return nil
+				}
+				backoff = nextBackoff(backoff, maxBackoff)
+				continue
+			}
+			// Clean session close (peer EOF) — keep retrying since
+			// we don't have a "graceful shutdown" signal yet; the
+			// caller cancels ctx if they actually want to stop.
+			continue
+		case err := <-socksErr:
+			_ = sess.Close()
+			_ = conn.Close()
+			if err != nil {
+				return c.fail("socks5", err)
+			}
+			return nil
+		case <-ctx.Done():
+			_ = sess.Close()
+			_ = conn.Close()
+			c.emit(Event{Type: EventDisconnected, Transport: label})
+			return nil
+		}
+	}
+}
+
+// nextBackoff doubles the current delay up to a cap. A small jitter
+// would be nicer (avoid thundering-herd reconnects across clients
+// when a server reboots) but keep it deterministic for now.
+func nextBackoff(cur, max time.Duration) time.Duration {
+	next := cur * 2
+	if next > max {
+		next = max
+	}
+	return next
+}
+
+// sleepBackoff sleeps for d or returns false if ctx is cancelled
+// first. Caller treats false as "give up the loop entirely".
+func sleepBackoff(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
 	select {
-	case err := <-runErr:
-		if err != nil {
-			return c.fail("session", err)
-		}
-		return nil
-	case err := <-socksErr:
-		if err != nil {
-			return c.fail("socks5", err)
-		}
-		return nil
+	case <-t.C:
+		return true
 	case <-ctx.Done():
-		return nil
+		return false
 	}
 }
 

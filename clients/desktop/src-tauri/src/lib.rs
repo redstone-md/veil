@@ -110,6 +110,8 @@ async fn veil_start(
         });
     });
     v_ref.start(Some(cb)).map_err(|e| format!("start: {e}"))?;
+    drop(guard);
+    spawn_metrics_poller(app.clone());
     Ok(())
 }
 
@@ -126,6 +128,78 @@ async fn veil_stop(state: State<'_, VeilState>) -> Result<(), String> {
         drop(v);
     }
     Ok(())
+}
+
+/// Spawn a background poller that pulls Veil::metrics() every 250ms
+/// and emits a synthetic Traffic event whenever the byte counters
+/// change. libveil's own trafficTicker only fires at 1 Hz, which
+/// makes the throughput chart laggy under bursty load. Pulling the
+/// metrics directly from the SDK (which reads atomic counters) gives
+/// the UI sub-second resolution.
+///
+/// Exits when no Veil instance is parked in either VeilState or the
+/// (Windows-only) TunState slot — i.e. after a clean disconnect.
+fn spawn_metrics_poller(app: AppHandle) {
+    use std::time::Duration;
+    tauri::async_runtime::spawn(async move {
+        let mut last: (i64, i64) = (0, 0);
+        let mut idle_ticks: u32 = 0;
+        loop {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            let snapshot = read_metrics(&app);
+            let m = match snapshot {
+                Some(m) => m,
+                None => return, // no active session — caller must respawn on next start
+            };
+            if (m.bytes_tx, m.bytes_rx) != last {
+                last = (m.bytes_tx, m.bytes_rx);
+                idle_ticks = 0;
+                let _ = app.emit("veil-event", UiEvent {
+                    kind: 4, // Traffic
+                    message: String::new(),
+                    transport: String::new(),
+                    remote: String::new(),
+                    bytes_tx: m.bytes_tx,
+                    bytes_rx: m.bytes_rx,
+                });
+            } else {
+                // No change — back off a bit so an idle tunnel doesn't
+                // burn CPU on lock-acquire spam, but still emit a
+                // periodic Traffic event so the chart's "0 B/s"
+                // baseline is fresh.
+                idle_ticks = idle_ticks.saturating_add(1);
+                if idle_ticks % 4 == 0 {
+                    let _ = app.emit("veil-event", UiEvent {
+                        kind: 4,
+                        message: String::new(),
+                        transport: String::new(),
+                        remote: String::new(),
+                        bytes_tx: m.bytes_tx,
+                        bytes_rx: m.bytes_rx,
+                    });
+                }
+            }
+        }
+    });
+}
+
+fn read_metrics(app: &AppHandle) -> Option<veil::Metrics> {
+    {
+        let vs = app.state::<VeilState>();
+        let g = vs.inner.lock().expect("VeilState mutex poisoned");
+        if let Some(v) = g.as_ref() {
+            return v.metrics().ok();
+        }
+    }
+    #[cfg(windows)]
+    {
+        let ts = app.state::<tun::TunState>();
+        let g = ts.inner.lock().expect("TunState mutex poisoned");
+        if let Some(s) = g.as_ref() {
+            return s.veil.metrics().ok();
+        }
+    }
+    None
 }
 
 #[tauri::command]
@@ -173,7 +247,7 @@ async fn check_update() -> Result<UpdateInfo, String> {
              This is normal for dev builds; release installers ship the CLI alongside the GUI.".into(),
         ),
     };
-    let output = std::process::Command::new(&exe)
+    let output = silent_command(&exe)
         .args(["update", "check", "--json"])
         .output()
         .map_err(|e| format!("exec {}: {e}", exe.display()))?;
@@ -190,7 +264,7 @@ async fn apply_update() -> Result<(), String> {
     let exe = veil_cli_path().ok_or_else(|| {
         "Updates unavailable: bundled `veil` CLI was not found next to the app.".to_string()
     })?;
-    let output = std::process::Command::new(&exe)
+    let output = silent_command(&exe)
         .args(["update", "apply", "--cosign"])
         .output()
         .map_err(|e| format!("exec {}: {e}", exe.display()))?;
@@ -199,6 +273,22 @@ async fn apply_update() -> Result<(), String> {
         return Err(format!("veil update apply failed: {stderr}"));
     }
     Ok(())
+}
+
+/// Build a `Command` that won't pop a console window on Windows. On
+/// other platforms this is a plain `Command::new`.
+fn silent_command<P: AsRef<std::ffi::OsStr>>(program: P) -> std::process::Command {
+    let cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut cmd = cmd;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        return cmd;
+    }
+    #[cfg(not(windows))]
+    cmd
 }
 
 #[derive(Debug, Serialize, serde::Deserialize)]
@@ -310,11 +400,120 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+// --- Self-elevation -------------------------------------------------
+//
+// TUN mode needs admin/root. Rather than tell the user "right-click
+// → Run as administrator", we pop the platform's native consent
+// dialog (UAC on Windows, PolicyKit/sudo on Linux) when they click
+// Connect with TUN selected. On confirm, a fresh elevated instance
+// of veil-desktop launches and the unprivileged one exits cleanly —
+// profile + settings state survive via tauri-plugin-store on disk.
+
+#[derive(Debug, Serialize)]
+struct ElevationStatus {
+    elevated: bool,
+    /// True if we can pop a native dialog to elevate ourselves.
+    /// False on platforms where the user has to do it manually.
+    can_request: bool,
+}
+
+#[tauri::command]
+async fn elevation_status() -> Result<ElevationStatus, String> {
+    Ok(ElevationStatus {
+        elevated: is_currently_elevated(),
+        can_request: cfg!(any(target_os = "windows", target_os = "linux")),
+    })
+}
+
+#[tauri::command]
+async fn request_elevation(app: AppHandle) -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("locate self: {e}"))?;
+
+    #[cfg(windows)]
+    {
+        // PowerShell's Start-Process -Verb RunAs triggers the UAC
+        // consent dialog. The new process inherits no environment
+        // from us; it reads the same on-disk profile store and
+        // resumes exactly where the user left off.
+        let exe_str = exe.display().to_string().replace('\'', "''");
+        let script = format!("Start-Process -FilePath '{exe_str}' -Verb RunAs");
+        let status = silent_command("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .status()
+            .map_err(|e| format!("spawn UAC: {e}"))?;
+        if !status.success() {
+            return Err("user declined the UAC prompt".into());
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // Try pkexec first — it pops a graphical PolicyKit prompt
+        // that integrates with whichever DE the user runs (GNOME,
+        // KDE, etc). Fall back to the SUDO_ASKPASS pattern only if
+        // pkexec is missing; on a headless VM neither exists and we
+        // bubble the error so the UI can show the manual-run hint.
+        let exe_str = exe.display().to_string();
+        let pkexec_ok = std::process::Command::new("pkexec")
+            .arg(&exe_str)
+            .spawn()
+            .is_ok();
+        if !pkexec_ok {
+            // Try sudo with a graphical askpass if available.
+            let askpass = std::env::var("SUDO_ASKPASS").unwrap_or_default();
+            if askpass.is_empty() {
+                return Err(
+                    "Install policykit-1 (pkexec) or run Veil from a terminal with sudo. \
+                     Without a graphical privilege helper we can't elevate ourselves."
+                        .into(),
+                );
+            }
+            std::process::Command::new("sudo")
+                .args(["-A", &exe_str])
+                .spawn()
+                .map_err(|e| format!("sudo askpass: {e}"))?;
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        return Err("self-elevation not implemented on this platform yet".into());
+    }
+
+    // Hand control to the freshly-spawned elevated copy. Brief delay
+    // so the new process's window has a chance to materialise before
+    // ours disappears; keeps the user from seeing nothing for a beat.
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        app_clone.exit(0);
+    });
+    Ok(())
+}
+
+// is_currently_elevated probes whether *this* process has admin/root.
+// Win: re-uses the tun module's `net session` probe. Linux: parses
+// `id -u` so we don't need a libc dep just for one syscall. macOS:
+// stubbed — TUN mode is Windows-only today, the macOS port lives in
+// a follow-up PR.
+#[cfg(windows)]
+fn is_currently_elevated() -> bool { tun::is_elevated_pub() }
+#[cfg(target_os = "linux")]
+fn is_currently_elevated() -> bool {
+    let out = match std::process::Command::new("id").arg("-u").output() {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    String::from_utf8_lossy(&out.stdout).trim() == "0"
+}
+#[cfg(not(any(windows, target_os = "linux")))]
+fn is_currently_elevated() -> bool { false }
+
 // --- TUN (Windows / Wintun) commands -------------------------------
 
 #[cfg(windows)]
 #[tauri::command]
 async fn tun_start(
+    app: AppHandle,
     tun_state: State<'_, tun::TunState>,
     state: State<'_, VeilState>,
     args: tun::TunStartArgs,
@@ -334,8 +533,18 @@ async fn tun_start(
             let _ = tun::tun_stop(prev);
         }
     }
-    let (status, session) = tun::tun_start(args)?;
+    // Bring-up does multiple seconds of synchronous work (netsh,
+    // route, Wintun adapter create). Run it on the blocking pool so
+    // the async runtime worker stays free and "tun-progress" events
+    // we emit from the worker reach the UI in real time.
+    let app_for_blocking = app.clone();
+    let (status, session) = tauri::async_runtime::spawn_blocking(move || {
+        tun::tun_start(&app_for_blocking, args)
+    })
+    .await
+    .map_err(|e| format!("tun_start join: {e}"))??;
     *tun_state.inner.lock().expect("TunState mutex poisoned") = Some(session);
+    spawn_metrics_poller(app.clone());
     Ok(status)
 }
 
@@ -390,6 +599,8 @@ pub fn run() {
             apply_update,
             tun_start,
             tun_stop,
+            elevation_status,
+            request_elevation,
         ])
         .on_window_event(|window, event| {
             // Closing the main window minimises to tray instead of

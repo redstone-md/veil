@@ -65,3 +65,7 @@ perp.md
 /.aider*
 /.windsurf/
 /.idea/workspace.xml
+
+# Internal design mockups — JSX prototypes used as a visual reference
+# for the production frontends; not part of the shipped product.
+/design/

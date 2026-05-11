@@ -14,6 +14,7 @@ import (
 
 	"github.com/flynn/noise"
 
+	"github.com/redstone-md/veil/core/internal/bufpool"
 	"github.com/redstone-md/veil/core/internal/transport"
 )
 
@@ -63,20 +64,25 @@ func (c *SecureChannel) SendFrame(plaintext []byte) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
-	cipher, err := c.send.Encrypt(nil, nil, plaintext)
+	// Encrypt directly into a pooled buffer: 4-byte header room + space
+	// for plaintext + AEAD tag (16 B). Eliminates the per-frame alloc
+	// the noise.Encrypt(nil, nil, plaintext) call used to hand back.
+	out := bufpool.Get(4 + len(plaintext) + 16)
+	defer bufpool.Put(out)
+	cipher, err := c.send.Encrypt(out[:4], nil, plaintext)
 	if err != nil {
 		return fmt.Errorf("secure: encrypt: %w", err)
 	}
-	if len(cipher) > MaxCiphertextSize {
-		return fmt.Errorf("secure: ciphertext too large: %d", len(cipher))
+	cipherLen := len(cipher) - 4 // strip the header prefix we reserved
+	if cipherLen > MaxCiphertextSize {
+		return fmt.Errorf("secure: ciphertext too large: %d", cipherLen)
 	}
-	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(cipher)))
-	if _, err := c.conn.Write(hdr[:]); err != nil {
-		return fmt.Errorf("secure: write header: %w", err)
-	}
+	binary.BigEndian.PutUint32(cipher[:4], uint32(cipherLen))
+	// Single transport Write: header+ciphertext now contiguous so the
+	// kernel ships them as one TCP segment without the Nagle-vs-PSH
+	// split risk a two-call sequence had.
 	if _, err := c.conn.Write(cipher); err != nil {
-		return fmt.Errorf("secure: write body: %w", err)
+		return fmt.Errorf("secure: write: %w", err)
 	}
 	return nil
 }
@@ -102,11 +108,13 @@ func (c *SecureChannel) RecvFrame() ([]byte, error) {
 	if n > MaxCiphertextSize {
 		return nil, fmt.Errorf("secure: ciphertext too large: %d", n)
 	}
-	buf := make([]byte, n)
+	buf := bufpool.Get(int(n))
 	if _, err := io.ReadFull(c.conn, buf); err != nil {
+		bufpool.Put(buf)
 		return nil, fmt.Errorf("secure: read body: %w", err)
 	}
 	plain, err := c.recv.Decrypt(nil, nil, buf)
+	bufpool.Put(buf)
 	if err != nil {
 		return nil, fmt.Errorf("secure: decrypt: %w", err)
 	}
