@@ -1,6 +1,10 @@
 [package]
 name = "veil-desktop"
-version = "0.0.1"
+# Kept in lock-step with tauri.conf.json's `version`. Tauri reads the
+# JSON value at build time for the bundle name, but the runtime
+# package_info().version (which the updater compares against the
+# manifest) comes from this Cargo manifest.
+version = "0.1.0-alpha.6"
 description = "Desktop client for Veil VPN."
 authors = ["Veil VPN Project Contributors"]
 license = "Apache-2.0"

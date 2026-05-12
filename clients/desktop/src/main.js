@@ -9,8 +9,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { Store } from "@tauri-apps/plugin-store";
 import { relaunch } from "@tauri-apps/plugin-process";
+
+// Resolved once at module load. The label nodes that render this
+// (sidebar foot + onboarding foot) read it lazily, so the empty
+// initial value gets replaced before paint.
+let _appVersion = "";
+getVersion().then((v) => {
+  _appVersion = `v${v}`;
+  // Patch any already-rendered labels by class.
+  document.querySelectorAll("[data-app-version]").forEach((n) => {
+    n.textContent = _appVersion;
+  });
+}).catch(() => { _appVersion = "v?"; });
 
 import { state, set, subscribeAll, throughput, liveStats, queryClient, cachedInvoke, invalidate } from "./store.js";
 
@@ -212,7 +225,7 @@ function renderSidebar() {
   sb.append(navItem("settings", "Settings",   glyph("settings", 15)));
   sb.append(el("div", { style: "flex:1" }));
   sb.append(el("div", { class: "sb-foot" },
-    el("span", {}, "v0.1.0-alpha.1"),
+    el("span", { "data-app-version": "1" }, _appVersion || "…"),
     el("span", { class: "sb-tag" }, "PRE-ALPHA"),
   ));
   return sb;
@@ -746,11 +759,20 @@ async function maybeAutoCheckUpdate() {
 
 function showUpdatePrompt() {
   if (!state.update?.update_available) return;
+  // Render the manifest's `notes` (Markdown from the tag annotation)
+  // into a richer DOM tree than the default modal body's plain text.
+  // Tiny ad-hoc renderer — no external markdown lib is worth pulling
+  // for the handful of constructs release notes actually use:
+  // headings (# / ##), inline code (`x`), paragraphs (blank line
+  // separator), lists (- / *).
+  const bodyNode = renderUpdateNotes(
+    state.update.notes && state.update.notes.trim().length > 0
+      ? state.update.notes
+      : `A new version of Veil is available. Install ${state.update.latest}? The app will restart automatically.`
+  );
   openModal({
     title: `Update available — ${state.update.latest}`,
-    body: state.update.notes && state.update.notes.trim().length > 0
-      ? state.update.notes
-      : `A new version of Veil is available. Install ${state.update.latest}? The app will restart automatically.`,
+    bodyNode,
     submitLabel: "Install now",
     cancelLabel: "Later",
     onSubmit: async () => {
@@ -760,6 +782,60 @@ function showUpdatePrompt() {
       doApplyUpdate();
     },
   });
+}
+
+// Tiny markdown → DOM renderer scoped to what release notes contain
+// in practice. Splits on blank lines for paragraphs, recognises
+// `## heading`, `- item`, and inline `code`. Anything more exotic
+// renders as a plain paragraph — a markdown lib would be overkill.
+function renderUpdateNotes(text) {
+  const root = el("div", { class: "update-notes" });
+  const paragraphs = text.replace(/\r\n/g, "\n").split(/\n{2,}/);
+  for (const p of paragraphs) {
+    const trimmed = p.trim();
+    if (!trimmed) continue;
+
+    // Heading
+    const h = trimmed.match(/^#{1,6}\s+(.+)$/);
+    if (h) {
+      root.append(el("h3", { class: "update-h" }, h[1]));
+      continue;
+    }
+
+    // Bullet list — every line in this paragraph starts with - or *
+    const lines = trimmed.split("\n");
+    if (lines.every((l) => /^\s*[-*]\s+/.test(l))) {
+      const ul = el("ul", { class: "update-ul" });
+      for (const l of lines) {
+        const item = el("li", null);
+        appendInline(item, l.replace(/^\s*[-*]\s+/, ""));
+        ul.append(item);
+      }
+      root.append(ul);
+      continue;
+    }
+
+    // Plain paragraph; collapse single newlines into spaces (typical
+    // hard-wrapped commit/tag messages) so the text reflows in the
+    // narrower modal width.
+    const para = el("p", { class: "update-p" });
+    appendInline(para, lines.join(" "));
+    root.append(para);
+  }
+  return root;
+}
+
+// Walk a string of inline content, breaking out backtick-quoted
+// spans into <code> elements. Everything else lands as a text node.
+function appendInline(parent, s) {
+  const parts = s.split(/(`[^`]+`)/g);
+  for (const part of parts) {
+    if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
+      parent.append(el("code", { class: "update-code" }, part.slice(1, -1)));
+    } else if (part) {
+      parent.append(document.createTextNode(part));
+    }
+  }
 }
 
 // Render the install progress as a single self-replacing toast so
@@ -974,9 +1050,16 @@ function modalEl(m) {
       } catch (e) { toast(String(e?.message || e), "error"); }
     }
   };
+  // `bodyNode` is the rich variant; release-notes modals build a
+  // <div> with paragraphs / headings / lists in renderUpdateNotes
+  // and pass it here. Plain `body` strings still go through the
+  // legacy text path so existing call-sites keep working.
+  const bodyEl = m.bodyNode
+    ? el("div", { class: "modal-body" }, m.bodyNode)
+    : (m.body ? el("div", { class: "modal-body" }, m.body) : null);
   const card = el("div", { class: "modal-card" },
     el("div", { class: "modal-title" }, m.title),
-    m.body ? el("div", { class: "modal-body" }, m.body) : null,
+    bodyEl,
     ...fields,
     el("div", { class: "modal-actions" },
       el("button", { class: "subtle", onclick: cancel }, m.cancelLabel || "Cancel"),
@@ -1049,7 +1132,7 @@ function renderOnboarding(host) {
   );
   const foot = el("div", { class: "ob-foot" },
     el("span", null, "Pre-alpha · No external audit yet"),
-    el("span", { style: "font-family: var(--font-mono)" }, "v0.1.0-alpha.1"),
+    el("span", { "data-app-version": "1", style: "font-family: var(--font-mono)" }, _appVersion || "…"),
   );
 
   host.append(el("div", { class: "ob-pad" }, card), foot);

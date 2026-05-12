@@ -828,6 +828,47 @@ input:focus, textarea:focus, select:focus {
 .modal-body { color: var(--text-dim); font-size: 13px; line-height: 1.5; }
 .modal-field { display: flex; flex-direction: column; gap: 6px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+/* ─── update-prompt modal — richer markdown-ish styling ─────── */
+.update-notes {
+  max-height: 50vh;
+  overflow-y: auto;
+  padding-right: 6px;
+  /* Subtle scroll indicator that matches the rest of the chrome. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.update-notes .update-h {
+  margin: 14px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.update-notes .update-h:first-child { margin-top: 0; }
+.update-notes .update-p {
+  margin: 8px 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.update-notes .update-ul {
+  margin: 8px 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+.update-notes .update-ul li { margin: 3px 0; }
+.update-notes .update-code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes popIn  { from { opacity: 0; transform: scale(0.96) translateY(4px); } to { opacity: 1; transform: none; } }
 

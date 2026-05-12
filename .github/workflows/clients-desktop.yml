@@ -253,7 +253,16 @@ jobs:
       needs.build.result != 'cancelled' &&
       startsWith(github.ref, 'refs/tags/v')
     steps:
+      # fetch-depth: 0 + tags so `git tag -l --format='%(contents)'`
+      # below can read the annotated-tag body. Without these flags
+      # only the bare commit SHA is checked out and the tag's
+      # message resolves to empty (which then falls through to the
+      # commit summary — see the alpha.5 release notes which showed
+      # the fix-commit message instead of the alpha.5 tag body).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/download-artifact@v4
         with:

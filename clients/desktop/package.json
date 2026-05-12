@@ -1,6 +1,6 @@
 {
   "name": "veil-desktop",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha.6",
   "private": true,
   "description": "Desktop client for Veil VPN.",
   "license": "Apache-2.0",
