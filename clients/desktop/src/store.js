@@ -35,7 +35,12 @@ const initial = {
     mimicry: "browse",
     decoy: false,
     notifications: true,
-    mode: "socks5",
+    // System-wide TUN by default — covers every app on the box
+    // without per-app proxy configuration. SOCKS5 stays available in
+    // Settings as the no-admin escape hatch (per-app proxy on
+    // 127.0.0.1:1080); the openElevationPrompt flow surfaces a
+    // "Use SOCKS5 instead" button when the user declines UAC.
+    mode: "tun",
     transport: "auto",
     bypassCidrs: "",
   },

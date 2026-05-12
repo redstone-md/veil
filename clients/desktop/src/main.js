@@ -669,9 +669,11 @@ function openElevationPrompt() {
     title: "Restart with admin rights?",
     body: "System-wide TUN mode needs administrator privileges to install routes and create the Wintun adapter. " +
           "Click Restart to confirm via the Windows UAC prompt — Veil will close and reopen with the rights it needs. " +
-          "All your servers and settings stay put.",
+          "All your servers and settings stay put.\n\n" +
+          "Don't want to elevate right now? Click 'Use SOCKS5 instead' to fall back to a per-app proxy on 127.0.0.1:1080. " +
+          "You can switch back to TUN any time from Settings → Mode.",
     submitLabel: "Restart with admin",
-    cancelLabel: "Cancel",
+    cancelLabel: "Use SOCKS5 instead",
     onSubmit: async () => {
       try {
         await invoke("request_elevation");
@@ -682,6 +684,17 @@ function openElevationPrompt() {
         toast("Elevation declined: " + e, "error");
         throw e;
       }
+    },
+    // Cancel doubles as "fall back to SOCKS5" — flip the persisted
+    // mode setting and re-attempt connect immediately so the user
+    // gets traffic flowing without a second click.
+    onCancel: async () => {
+      // set() expects a functional patch that RETURNS the slice diff
+      // (the store applies it via setState shallow-merge), not a
+      // mutator. See store.js:120.
+      set((s) => ({ settings: { ...s.settings, mode: "socks5" } }));
+      toast("Switched to SOCKS5 (per-app proxy on 127.0.0.1:1080).", "info");
+      await connect();
     },
   });
 }
@@ -866,15 +879,30 @@ function modalEl(m) {
     } catch (e) { toast(String(e?.message || e), "error"); return; }
     if (state.modal === m) closeModal();
   };
+  // Cancel handler — fires onCancel if the caller registered one,
+  // then dismisses the modal. Used today by the elevation prompt to
+  // surface a "Use SOCKS5 instead" path; defaults to plain dismiss.
+  const cancel = async () => {
+    if (state.modal === m) closeModal();
+    if (typeof m.onCancel === "function") {
+      try {
+        const r = m.onCancel();
+        if (r && typeof r.then === "function") await r;
+      } catch (e) { toast(String(e?.message || e), "error"); }
+    }
+  };
   const card = el("div", { class: "modal-card" },
     el("div", { class: "modal-title" }, m.title),
     m.body ? el("div", { class: "modal-body" }, m.body) : null,
     ...fields,
     el("div", { class: "modal-actions" },
-      el("button", { class: "subtle", onclick: closeModal }, m.cancelLabel || "Cancel"),
+      el("button", { class: "subtle", onclick: cancel }, m.cancelLabel || "Cancel"),
       el("button", { class: m.danger ? "danger" : "primary", onclick: submit }, m.submitLabel || "OK"),
     ),
   );
+  // Backdrop / Escape dismiss → plain close, NOT onCancel. Background
+  // click is usually accidental; we don't want it to silently switch
+  // modes. Users have to make the choice via the explicit button.
   return el("div", { class: "modal-backdrop", onclick: (ev) => { if (ev.target === ev.currentTarget) closeModal(); } }, card);
 }
 
