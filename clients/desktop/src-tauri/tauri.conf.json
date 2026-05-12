@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Veil",
-        "width": 560,
-        "height": 720,
-        "minWidth": 480,
-        "minHeight": 600,
+        "width": 860,
+        "height": 600,
+        "minWidth": 720,
+        "minHeight": 540,
         "resizable": true,
         "fullscreen": false,
         "decorations": false,
