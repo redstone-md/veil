@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Store } from "@tauri-apps/plugin-store";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 import { state, set, subscribeAll, throughput, liveStats, queryClient, cachedInvoke, invalidate } from "./store.js";
 
@@ -715,25 +716,107 @@ async function disconnect() {
   }
 }
 
-async function doCheckUpdate() {
-  toast("Checking for updates…", "info");
+async function doCheckUpdate({ silent = false } = {}) {
+  if (!silent) toast("Checking for updates…", "info");
   try {
     state.update = await invoke("check_update");
     pushLog(`update check: latest=${state.update.latest} ${state.update.update_available ? "(available)" : "(up to date)"}`);
-  } catch (e) { toast("Update check failed: " + e, "error"); }
+    if (!silent && !state.update.update_available) {
+      toast(`You're on the latest (${state.update.current}).`, "success");
+    }
+  } catch (e) {
+    if (!silent) toast("Update check failed: " + e, "error");
+    pushLog("update check failed: " + e);
+  }
   render();
+  return state.update;
 }
-function doApplyUpdate() {
+
+// Fired ~8 s after launch, after the user's persisted profile has
+// loaded but before they typically click Connect. Silent on the
+// no-update path so the "you're on latest" toast doesn't ambush
+// users every cold start. If an update IS available, surface the
+// changelog modal so the user can choose Install / Later.
+async function maybeAutoCheckUpdate() {
+  const u = await doCheckUpdate({ silent: true });
+  if (u && u.update_available) {
+    showUpdatePrompt();
+  }
+}
+
+function showUpdatePrompt() {
   if (!state.update?.update_available) return;
   openModal({
-    title: "Install update",
-    body: `Download and install ${state.update.latest}? The app will need to restart.`,
-    submitLabel: "Install",
+    title: `Update available — ${state.update.latest}`,
+    body: state.update.notes && state.update.notes.trim().length > 0
+      ? state.update.notes
+      : `A new version of Veil is available. Install ${state.update.latest}? The app will restart automatically.`,
+    submitLabel: "Install now",
+    cancelLabel: "Later",
     onSubmit: async () => {
-      try { await invoke("apply_update"); toast("Update installed; restart the app.", "success"); }
-      catch (e) { throw new Error("Update apply failed: " + e); }
+      // Hand off to the install flow. doApplyUpdate opens its own
+      // progress UI (toast-based) and handles the relaunch, so we
+      // dismiss this prompt immediately.
+      doApplyUpdate();
     },
   });
+}
+
+// Render the install progress as a single self-replacing toast so
+// the user sees a live MB / % counter without us re-opening the
+// modal on every chunk (which would steal focus mid-typing).
+let _updateOff = null;
+let _updateOffDone = null;
+function doApplyUpdate() {
+  if (!state.update?.update_available) return;
+  if (_updateOff || _updateOffDone) return; // install already in flight
+  toast(`Downloading ${state.update.latest}…`, "info");
+
+  const fmtMB = (b) => (b / 1024 / 1024).toFixed(1);
+  let lastShown = 0;
+
+  // Subscribe to progress + finished signals BEFORE invoking apply
+  // so we can't race a fast first chunk.
+  const wireListeners = async () => {
+    _updateOff = await listen("update-progress", (msg) => {
+      const p = msg.payload || {};
+      const downloaded = p.downloaded || 0;
+      const total = p.total || 0;
+      const now = Date.now();
+      // Throttle toast updates to ~5 Hz so we don't thrash the DOM.
+      if (now - lastShown < 200) return;
+      lastShown = now;
+      const text = total > 0
+        ? `Downloading ${state.update.latest}… ${fmtMB(downloaded)} / ${fmtMB(total)} MB (${Math.round(downloaded / total * 100)}%)`
+        : `Downloading ${state.update.latest}… ${fmtMB(downloaded)} MB`;
+      // Replace the toast in place.
+      state.toast = { text, kind: "info" };
+      render();
+    });
+    _updateOffDone = await listen("update-event", async (msg) => {
+      if (msg.payload?.kind !== "finished") return;
+      _updateOff?.(); _updateOffDone?.();
+      _updateOff = _updateOffDone = null;
+      toast("Update installed. Restarting…", "success");
+      // Tiny delay so the toast actually appears before the relaunch
+      // wipes the window.
+      await new Promise((r) => setTimeout(r, 1200));
+      try { await relaunch(); }
+      catch (e) { toast("Relaunch failed: " + e + ". Close the app manually.", "error"); }
+    });
+  };
+
+  (async () => {
+    try {
+      await wireListeners();
+      await invoke("apply_update");
+    } catch (e) {
+      _updateOff?.(); _updateOffDone?.();
+      _updateOff = _updateOffDone = null;
+      toast("Update install failed: " + e, "error");
+      pushLog("update apply failed: " + e);
+    }
+  })();
 }
 
 // ─── event channel ─────────────────────────────────────────────
@@ -1228,3 +1311,8 @@ function el(tag, props, ...children) {
 // ─── boot ──────────────────────────────────────────────────────
 
 bootStore();
+
+// Auto-check for updates 8 s after launch — past the moment the user
+// typically clicks Connect, but soon enough that the prompt lands
+// during their first session rather than several restarts later.
+setTimeout(() => { maybeAutoCheckUpdate(); }, 8000);

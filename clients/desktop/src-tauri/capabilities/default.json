@@ -22,6 +22,9 @@
     "dialog:default",
     "notification:default",
     "store:default",
-    "autostart:default"
+    "autostart:default",
+    "updater:default",
+    "process:default",
+    "process:allow-restart"
   ]
 }

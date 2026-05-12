@@ -20,6 +20,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-store = "2"
 tauri-plugin-autostart = "2"
+# Auto-update plumbing — endpoints + Ed25519 pubkey live in
+# tauri.conf.json, the Rust side just wires the plugin into the
+# builder. The companion `process` plugin gives the JS side a
+# `relaunch()` after install completes.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }

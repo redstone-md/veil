@@ -235,44 +235,89 @@ async fn get_autostart(app: AppHandle) -> Result<bool, String> {
         .map_err(|e| format!("autostart query: {e}"))
 }
 
-/// Check for updates by shelling out to the bundled `veil` CLI.
-/// Single-sources the GitHub release query + signature verification
-/// in core/internal/update; the desktop UI just renders the result.
+/// Check for updates against the configured updater endpoint.
+///
+/// Routed through tauri-plugin-updater so signature verification and
+/// platform-target selection live in the well-audited plugin rather
+/// than in our shelling-to-CLI legacy. The GitHub release manifest is
+/// served from the latest release's `latest.json` asset (see
+/// release.yml's `manifest` job).
+///
+/// Returns `update_available=false` when we're already on the latest
+/// version. Returns an Err when the network probe fails or the
+/// signature can't be verified — those are user-actionable and should
+/// surface as a toast.
 #[tauri::command]
-async fn check_update() -> Result<UpdateInfo, String> {
-    let exe = match veil_cli_path() {
-        Some(p) => p,
-        None => return Err(
-            "Updates unavailable: bundled `veil` CLI was not found next to the app. \
-             This is normal for dev builds; release installers ship the CLI alongside the GUI.".into(),
-        ),
-    };
-    let output = silent_command(&exe)
-        .args(["update", "check", "--json"])
-        .output()
-        .map_err(|e| format!("exec {}: {e}", exe.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("veil update check failed: {stderr}"));
+async fn check_update(app: AppHandle) -> Result<UpdateInfo, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let current = app.package_info().version.to_string();
+    match app.updater().map_err(|e| e.to_string())?.check().await {
+        Ok(Some(u)) => Ok(UpdateInfo {
+            current,
+            latest: u.version.clone(),
+            update_available: true,
+            notes: u.body.clone().unwrap_or_default(),
+        }),
+        Ok(None) => Ok(UpdateInfo {
+            current: current.clone(),
+            latest: current,
+            update_available: false,
+            notes: String::new(),
+        }),
+        Err(e) => Err(format!("update check: {e}")),
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    serde_json::from_str(stdout.trim()).map_err(|e| format!("parse update json: {e}: {stdout}"))
 }
 
+/// Apply the available update.
+///
+/// Downloads the platform-matching binary from the manifest-listed
+/// URL, verifies the Ed25519 signature against the embedded pubkey
+/// (see tauri.conf.json:plugins.updater.pubkey), and replaces the
+/// running binary on relaunch. Emits "update-progress" events at
+/// each chunk and "update-event" {kind:"finished"} once the install
+/// step succeeds — the frontend uses both to drive a progress bar
+/// and the post-install relaunch prompt.
 #[tauri::command]
-async fn apply_update() -> Result<(), String> {
-    let exe = veil_cli_path().ok_or_else(|| {
-        "Updates unavailable: bundled `veil` CLI was not found next to the app.".to_string()
-    })?;
-    let output = silent_command(&exe)
-        .args(["update", "apply", "--cosign"])
-        .output()
-        .map_err(|e| format!("exec {}: {e}", exe.display()))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("veil update apply failed: {stderr}"));
-    }
+async fn apply_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let upd = match updater.check().await.map_err(|e| e.to_string())? {
+        Some(u) => u,
+        None => return Err("No update available.".into()),
+    };
+    let app_for_progress = app.clone();
+    let mut downloaded: u64 = 0;
+    upd.download_and_install(
+        move |chunk_len, total| {
+            downloaded = downloaded.saturating_add(chunk_len as u64);
+            let _ = app_for_progress.emit(
+                "update-progress",
+                UpdateProgress {
+                    downloaded,
+                    total: total.unwrap_or(0),
+                },
+            );
+        },
+        || {
+            // Tauri fires this once the bytes are on disk and the
+            // installer step has handed control back. Frontend uses
+            // it to flip the modal into "relaunch" state.
+            let _ = app.emit("update-event", serde_json::json!({"kind": "finished"}));
+        },
+    )
+    .await
+    .map_err(|e| format!("update install: {e}"))?;
     Ok(())
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct UpdateProgress {
+    /// Bytes downloaded so far.
+    downloaded: u64,
+    /// Total bytes the manifest advertised; 0 when the server didn't
+    /// send Content-Length (frontend should fall back to indeterminate
+    /// progress in that case).
+    total: u64,
 }
 
 /// Build a `Command` that won't pop a console window on Windows. On
@@ -296,31 +341,11 @@ struct UpdateInfo {
     current: String,
     latest: String,
     update_available: bool,
-}
-
-/// Resolve the bundled `veil` CLI binary. The desktop installer ships
-/// it next to the GUI executable; in dev builds neither file is
-/// present, in which case we return None so the caller can show the
-/// user a friendlier 'Updates unavailable' message instead of the raw
-/// 'program not found' error from the OS.
-fn veil_cli_path() -> Option<std::path::PathBuf> {
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let bundled = exe_dir.join(if cfg!(windows) { "veil.exe" } else { "veil" });
-    if bundled.exists() {
-        return Some(bundled);
-    }
-    // Fall back to PATH lookup so a developer with `veil` on $PATH can
-    // still exercise the in-app update flow without copying the CLI
-    // next to the dev binary.
-    let on_path = if cfg!(windows) { "veil.exe" } else { "veil" };
-    let path_env = std::env::var_os("PATH")?;
-    for dir in std::env::split_paths(&path_env) {
-        let candidate = dir.join(on_path);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
+    /// Release notes from the updater manifest. Markdown — frontend
+    /// renders it inside the update prompt modal so the user knows
+    /// what they're agreeing to install.
+    #[serde(default)]
+    notes: String,
 }
 
 /// Surface select runtime events as OS notifications. We deliberately
@@ -589,6 +614,11 @@ pub fn run() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        // Auto-update plumbing. Endpoint + pubkey come from
+        // tauri.conf.json; `process` exposes app::relaunch() so the
+        // frontend can reload the new binary after install completes.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             veil_start,
             veil_stop,
