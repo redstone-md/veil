@@ -41,6 +41,7 @@ type Stream struct {
 	rxClosed   bool   // local consumer abandoned the read side
 	rxWindow   uint32 // window we advertised; same as ring capacity
 	rxConsumed uint32 // bytes consumed since last WINDOW_UPDATE
+	rxSatHits  int    // consecutive deliver() Waits on a full ring (auto-grow trigger)
 
 	// Send side. txCredit tracks the bytes we may send before the
 	// peer next bumps our window. Writes block on txCreditCond when
@@ -57,6 +58,13 @@ type Stream struct {
 // half the window has been consumed batches updates and still keeps
 // the sender's pipe full so long as RTT < half-window-drain-time.
 const windowUpdateThreshold = 2 // emit when consumed > capacity / threshold
+
+// rxGrowSaturationHits is how many consecutive ring-full Waits in
+// deliver() trigger an auto-grow. Three is small enough that a
+// genuinely bandwidth-heavy flow ramps up within a handful of MTU,
+// large enough that one stalled consumer doesn't expand a ring it
+// will never need.
+const rxGrowSaturationHits = 3
 
 // Type reports whether the stream carries a reliable byte stream
 // (TCP CONNECT semantics) or len-prefixed UDP datagrams. Forward
@@ -258,6 +266,7 @@ func (s *Stream) deliver(payload []byte, fin bool) {
 		s.rxMu.Unlock()
 		return
 	}
+	growDelta := uint32(0)
 	for len(payload) > 0 && !s.rxClosed {
 		n := s.rxRing.Write(payload)
 		payload = payload[n:]
@@ -265,10 +274,42 @@ func (s *Stream) deliver(payload []byte, fin bool) {
 			s.rxCond.Broadcast() // wake Read
 		}
 		if len(payload) > 0 {
+			// Ring is full. Either the consumer is slow, or the flow
+			// is bandwidth-heavy and our 256 KiB starting window is
+			// the bottleneck. Count saturations; after a few in a row
+			// without any drain, grow the ring (up to MaxStreamRecvBuffer)
+			// and queue a WINDOW_UPDATE so the peer's send credit
+			// catches up.
+			s.rxSatHits++
+			if growDelta == 0 &&
+				s.rxSatHits >= rxGrowSaturationHits &&
+				s.rxRing.Cap() < MaxStreamRecvBuffer {
+				newCap := s.rxRing.Cap() * 2
+				if newCap > MaxStreamRecvBuffer {
+					newCap = MaxStreamRecvBuffer
+				}
+				if delta := s.rxRing.resize(newCap); delta > 0 {
+					s.rxWindow += uint32(delta)
+					growDelta = uint32(delta)
+					s.rxSatHits = 0
+					// One more attempt before we Wait — grown ring
+					// usually has room for the remainder right now.
+					if m := s.rxRing.Write(payload); m > 0 {
+						payload = payload[m:]
+						s.rxCond.Broadcast()
+					}
+					if len(payload) == 0 {
+						break
+					}
+				}
+			}
 			s.rxCond.Wait() // wait for Read to free space
 			if s.rxClosed {
 				break
 			}
+		} else {
+			// All bytes accepted — reset saturation streak.
+			s.rxSatHits = 0
 		}
 	}
 	if fin {
@@ -276,6 +317,13 @@ func (s *Stream) deliver(payload []byte, fin bool) {
 	}
 	s.rxCond.Broadcast()
 	s.rxMu.Unlock()
+	if growDelta > 0 {
+		// Tell the peer it now has growDelta more send credit. Send
+		// outside the lock — SendFrame may block on the secure
+		// channel's sendMu and we don't want to stall future deliver
+		// calls behind it.
+		_ = s.sendWindowUpdate(growDelta)
+	}
 	if fin && s.txClosed.Load() {
 		s.sess.removeStream(s.id)
 	}

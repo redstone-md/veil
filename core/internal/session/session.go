@@ -29,13 +29,25 @@ const (
 	RoleServer Role = Role(crypto.RoleResponder)
 )
 
-// DefaultStreamRecvBuffer caps the per-stream backlog of unread bytes
-// that the dispatcher will queue before it stops reading from the
-// peer's send side. This is a coarse stand-in for proper VWP/1 flow
-// control, which Phase 2 introduces; until then any single stream
-// whose consumer stalls will eventually back-pressure the entire
-// session.
-const DefaultStreamRecvBuffer = 1 << 20
+// DefaultStreamRecvBuffer is the INITIAL per-stream receive window
+// we advertise. Sized at 256 KiB so the typical browser fan-out
+// (50-200 concurrent flows) doesn't accumulate hundreds of MiB of
+// receiver-side buffer. Each Stream may grow its ring up to
+// MaxStreamRecvBuffer on demand — see Stream.deliver's saturation
+// detector — so single-stream high-bandwidth downloads (large file
+// fetches, single torrent peer) still scale beyond this floor.
+//
+// Tradeoff context: at 50 ms RTT a 256 KiB window saturates a single
+// flow at ~40 Mbit/s; the auto-grow path lifts that to ~160 Mbit/s
+// once a flow demonstrates it can absorb the data. Multi-flow
+// workloads (speedtest, browsers, Steam) aggregate across flows and
+// hit line rate at the floor.
+const DefaultStreamRecvBuffer = 1 << 18 // 256 KiB
+
+// MaxStreamRecvBuffer caps the auto-grow ladder. Picked at 1 MiB
+// because beyond that bufferbloat costs more (RTT inflation, CWND
+// confusion) than the single-flow throughput buys back.
+const MaxStreamRecvBuffer = 1 << 20 // 1 MiB
 
 // streamDataChunk caps how many plaintext bytes one STREAM_DATA frame
 // carries on the wire. Sized just under frame.MaxPayload (16383)

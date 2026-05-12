@@ -8,11 +8,12 @@ package session
 // ringBuf is a fixed-capacity circular byte buffer with no internal
 // locking. The owning Stream serialises access via rxMu.
 //
-// Lifetimes are scoped to one Stream so this lives alongside it
-// instead of in a public utilities package. Sized once at Stream
-// creation from the negotiated InitialWindow; never grows or
-// reallocates, which is the whole point — replacing the previous
-// append-style rxBuf killed O(N²) memcpy on long downloads.
+// Sizing: starts at the negotiated InitialWindow (typically 256 KiB
+// — see DefaultStreamRecvBuffer) and may grow up to MaxStreamRecvBuffer
+// when the producer side saturates the ring repeatedly. The grow path
+// doubles the capacity, copies live data, and returns the delta so
+// the caller can emit a WINDOW_UPDATE telling the peer it now has
+// more send credit.
 type ringBuf struct {
 	buf  []byte
 	head int // index of next byte to Read
@@ -20,9 +21,14 @@ type ringBuf struct {
 	size int // bytes currently stored
 }
 
+// defaultRingCap matches DefaultStreamRecvBuffer. Kept as a separate
+// constant so unit tests can reason about the ring without dragging
+// in the whole session package.
+const defaultRingCap = 1 << 18 // 256 KiB
+
 func newRingBuf(capacity int) *ringBuf {
 	if capacity <= 0 {
-		capacity = 1 << 20 // 1 MiB default
+		capacity = defaultRingCap
 	}
 	return &ringBuf{buf: make([]byte, capacity)}
 }
@@ -77,4 +83,29 @@ func (r *ringBuf) Write(p []byte) int {
 	r.tail = (r.tail + n) % cap
 	r.size += n
 	return n
+}
+
+// resize grows (or shrinks) the ring to newCap, preserving the bytes
+// currently in flight. Returns the (signed) capacity delta so the
+// caller can emit a matching WINDOW_UPDATE. Returns 0 if newCap
+// equals the current capacity, or if newCap can't fit existing data.
+func (r *ringBuf) resize(newCap int) int {
+	oldCap := len(r.buf)
+	if newCap == oldCap || newCap < r.size {
+		return 0
+	}
+	nb := make([]byte, newCap)
+	if r.size > 0 {
+		if r.head+r.size <= oldCap {
+			copy(nb, r.buf[r.head:r.head+r.size])
+		} else {
+			first := oldCap - r.head
+			copy(nb[:first], r.buf[r.head:])
+			copy(nb[first:r.size], r.buf[:r.size-first])
+		}
+	}
+	r.buf = nb
+	r.head = 0
+	r.tail = r.size
+	return newCap - oldCap
 }
