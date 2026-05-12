@@ -32,21 +32,26 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-amd64
-            libveil_ext: so
+            # GNU/clang linkers expand `-lveil` to `libveil.so`. Naming
+            # the cgo output without the `lib` prefix breaks cargo's
+            # link step before tauri-bundler ever runs.
+            libveil_name: libveil.so
             artifact_glob: |
               clients/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
               clients/desktop/src-tauri/target/release/bundle/appimage/*.AppImage.sig
               clients/desktop/src-tauri/target/release/bundle/deb/*.deb
           - os: macos-latest
             target: darwin-arm64
-            libveil_ext: dylib
+            libveil_name: libveil.dylib
             artifact_glob: |
               clients/desktop/src-tauri/target/release/bundle/dmg/*.dmg
               clients/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
               clients/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
           - os: windows-latest
             target: windows-amd64
-            libveil_ext: dll
+            # MSVC convention is bare `veil.dll`; the matching `veil.lib`
+            # import lib is generated below by gendef + dlltool.
+            libveil_name: veil.dll
             artifact_glob: |
               clients/desktop/src-tauri/target/release/bundle/msi/*.msi
               clients/desktop/src-tauri/target/release/bundle/nsis/*.exe
@@ -126,7 +131,7 @@ jobs:
               -X github.com/redstone-md/veil/core/internal/buildinfo.Version=${{ steps.meta.outputs.version }} \
               -X github.com/redstone-md/veil/core/internal/buildinfo.Commit=${{ steps.meta.outputs.commit }} \
               -X github.com/redstone-md/veil/core/internal/buildinfo.Date=${{ steps.meta.outputs.date }}" \
-            -o ../sdks/veil-rs/veil.${{ matrix.libveil_ext }} \
+            -o ../sdks/veil-rs/${{ matrix.libveil_name }} \
             ./pkg/cgo
           ls -la ../sdks/veil-rs/
 
@@ -238,7 +243,15 @@ jobs:
     name: Generate latest.json updater manifest
     needs: build
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # `if: always()` so the manifest still publishes when one of the
+    # platform legs flakes (e.g. macOS sometimes hits a transient
+    # codesign cert error). The downstream jq is already tolerant of
+    # missing per-platform .sig files; partial coverage beats no
+    # auto-update at all.
+    if: |
+      always() &&
+      needs.build.result != 'cancelled' &&
+      startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
